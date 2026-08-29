@@ -600,8 +600,8 @@ function DesktopBridgePane({ ctx }) {
             children: [
               jsx('div', {
                 style: {
-                  width: frameSize ? `${frameSize.w}px` : '1280px',
-                  height: frameSize ? `${frameSize.h}px` : '800px',
+                  width: frameSize ? `${Math.round(frameSize.w * 0.5)}px` : '640px',
+                  height: frameSize ? `${Math.round(frameSize.h * 0.5)}px` : '400px',
                   maxWidth: '100%', maxHeight: '100%'
                 },
                 children: jsx(FrameCanvas, { dataUrl, region, controlling: state === 'live', onInput: sendInput })

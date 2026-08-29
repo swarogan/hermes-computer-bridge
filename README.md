@@ -7,7 +7,7 @@ Sway, Hyprland) and on X11, because it asks the portal what it can do instead
 of branching on which desktop environment is running. The same panel can also
 view and control a Proxmox virtual machine over VNC.
 
-![The Computer pane docked above Cronjobs in the Hermes Desktop right column, streaming DP-1 live](docs/computer-pane.png)
+![The Computer pane docked above Scheduled Jobs in the Hermes Desktop right column, streaming a Proxmox VM (VM 112 mint-test) live](docs/computer-pane.png)
 
 The panel mounts as a `Computer` tab in the right sidebar, docked directly
 above Cronjobs, and appears only while a bot chat is open.
