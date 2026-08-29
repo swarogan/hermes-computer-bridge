@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.pytest_cache/
+.mypy_cache/
+state/
+evidence/*.png
+evidence/*.jpg
+evidence/*.webp
+# Atomic-swap temp; a killed helper can leave one behind.
+evidence/*.part
+!evidence/.gitkeep
+# Step-2 proof frame is committed on purpose: tests/test_frame_content.py
+# asserts against it, and the dead-band claim is only checkable with pixels.
+!evidence/abc-frame-unlocked.png
+*.log
+.DS_Store
+.claude-task-live-stream.md

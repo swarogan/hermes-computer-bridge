@@ -1,0 +1,14 @@
+name: hermes-computer-bridge
+version: 0.1.0
+description: "Capability-ladder desktop capture/input for Hermes. Portal ScreenCast first (KDE/GNOME/COSMIC/wlroots), not DE if-elif. Unified Python backend + thin desktop canvas."
+author: "@coder (Hermes)"
+kind: backend
+provides_tools:
+  - computer_bridge_screenshot
+  - computer_bridge_status
+  - computer_bridge_click
+  - computer_bridge_type
+  - computer_bridge_key
+  - computer_bridge_move
+  - computer_bridge_scroll
+  - computer_bridge_drag

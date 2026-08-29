@@ -1,0 +1,13 @@
+# Non-secret settings for hermes-computer-bridge.
+# Copy values into Hermes config.yaml under plugins, never into .env.
+
+computer_bridge:
+  # Path to the system interpreter that has gi + Gst (not the Hermes venv).
+  system_python: /usr/bin/python3
+  # Persist-mode for xdg-desktop-portal ScreenCast: 0 none, 1 running, 2 until revoked.
+  persist_mode: 2
+  # JPEG quality for live frames (spike writes PNG).
+  jpeg_quality: 70
+  # Bounded retries for transient portal/PipeWire errors (not capability misses).
+  transient_retries: 3
+  transient_retry_ms: 400

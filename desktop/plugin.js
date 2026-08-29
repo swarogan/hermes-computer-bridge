@@ -1,0 +1,551 @@
+import { Button, EmptyState, ErrorState, PANES_AREA, host, useQuery, useQueryClient } from '@hermes/plugin-sdk'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { jsx, jsxs } from 'react/jsx-runtime'
+
+const ID = 'hermes-computer-bridge'
+const POLL_MS = 2000
+const FPS = 10
+// A live stream at FPS should refresh the frame version many times inside
+// this window; not doing so means the pipeline stopped producing even
+// though the helper process is still up.
+const STALL_MS = 4000
+const keys = { status: [ID, 'status'], frame: version => [ID, 'frame', version] }
+
+/**
+ * The one place that decides what the pane is allowed to claim.
+ *
+ * "Running" is not "live": the helper can be up with a stalled pipeline, and
+ * a blank frame is a black rectangle, not a working stream. So `live` is
+ * only returned when a real frame version exists, the helper counted frames,
+ * the frame is not blank, and it arrived recently.
+ *
+ * A failed start (declining the KDE consent dialog is the common case) is a
+ * STATE, not a dead end: the toolbar stays up so the user can ask again.
+ * Only an unreachable backend short-circuits to ErrorState.
+ */
+function connectionState({ connected, failed, live, version, lastFrameAt, now }) {
+  if (failed) return 'error'
+  if (!connected) return 'paused'
+  if (!live || !live.running) return 'connecting'
+  if (!version || !live.frames) return 'connecting'
+  if (live.blank) return 'blank'
+  if (lastFrameAt && now - lastFrameAt > STALL_MS) return 'stalled'
+  return 'live'
+}
+
+const STATE_LABEL = {
+  connecting: 'Connecting…',
+  live: 'Live',
+  stalled: 'Stalled — no new frame',
+  blank: 'Blank frame',
+  paused: 'Paused',
+  error: 'Stream failed'
+}
+
+/**
+ * Frame renderer with per-output crop.
+ *
+ * The portal returns ONE bounding-box stream spanning every monitor (KDE
+ * gives no per-monitor streams), so "pick a monitor" is a client-side crop
+ * into the region the geometry model already knows: output.x/y/width/height.
+ * `null` region = whole bounding box, letterboxed; the dead band stays
+ * visible there on purpose — it is the honest picture of the stream.
+ */
+const KEY_MAP = {
+  Enter: 'Return',
+  Backspace: 'BackSpace',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  Delete: 'Delete',
+  ArrowLeft: 'Left',
+  ArrowUp: 'Up',
+  ArrowRight: 'Right',
+  ArrowDown: 'Down',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'Page_Up',
+  PageDown: 'Page_Down',
+  ' ': 'space'
+}
+
+function activeMods(event) {
+  const mods = []
+  if (event.ctrlKey) mods.push('ctrl')
+  if (event.shiftKey) mods.push('shift')
+  if (event.altKey) mods.push('alt')
+  if (event.metaKey) mods.push('super')
+  return mods
+}
+
+function BUTTON_NAME(index) {
+  return index === 2 ? 'right' : index === 1 ? 'middle' : 'left'
+}
+
+function FrameCanvas({ dataUrl, region, controlling, onInput }) {
+  const canvasRef = useRef(null)
+  const imageRef = useRef(null)
+  const placeRef = useRef(null)
+  const lastMoveRef = useRef(0)
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current
+    const image = imageRef.current
+    if (!canvas || !image) return
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.clearRect(0, 0, canvas.width, canvas.height)
+
+    let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight
+    if (region) {
+      sx = Math.max(0, Math.round(region.x))
+      sy = Math.max(0, Math.round(region.y))
+      sw = Math.min(Math.round(region.width), image.naturalWidth - sx)
+      sh = Math.min(Math.round(region.height), image.naturalHeight - sy)
+      if (sw <= 0 || sh <= 0) return
+    }
+
+    const scale = Math.min(canvas.width / sw, canvas.height / sh)
+    const width = Math.round(sw * scale)
+    const height = Math.round(sh * scale)
+    const offsetX = Math.round((canvas.width - width) / 2)
+    const offsetY = Math.round((canvas.height - height) / 2)
+    placeRef.current = { sx, sy, sw, sh, scale, offsetX, offsetY }
+    context.drawImage(image, sx, sy, sw, sh, offsetX, offsetY, width, height)
+  }, [region])
+
+  const toStream = useCallback(event => {
+    const canvas = canvasRef.current
+    const place = placeRef.current
+    if (!canvas || !place) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const devX = (event.clientX - rect.left) * (canvas.width / rect.width)
+    const devY = (event.clientY - rect.top) * (canvas.height / rect.height)
+    const x = place.sx + (devX - place.offsetX) / place.scale
+    const y = place.sy + (devY - place.offsetY) / place.scale
+    return {
+      x: Math.round(Math.min(place.sx + place.sw, Math.max(place.sx, x))),
+      y: Math.round(Math.min(place.sy + place.sh, Math.max(place.sy, y)))
+    }
+  }, [])
+
+  const onMouseMove = useCallback(event => {
+    if (!controlling) return
+    const now = Date.now()
+    if (now - lastMoveRef.current < 16) return
+    lastMoveRef.current = now
+    const point = toStream(event)
+    if (point) onInput({ op: 'move', x: point.x, y: point.y })
+  }, [controlling, onInput, toStream])
+
+  const onMouseDown = useCallback(event => {
+    if (!controlling) return
+    event.preventDefault()
+    canvasRef.current?.focus()
+    const point = toStream(event)
+    if (point) onInput({ op: 'move', x: point.x, y: point.y })
+    onInput({ op: 'button', button: BUTTON_NAME(event.button), state: 'press' })
+  }, [controlling, onInput, toStream])
+
+  const onMouseUp = useCallback(event => {
+    if (!controlling) return
+    event.preventDefault()
+    onInput({ op: 'button', button: BUTTON_NAME(event.button), state: 'release' })
+  }, [controlling, onInput])
+
+  const onWheel = useCallback(event => {
+    if (!controlling) return
+    event.preventDefault()
+    onInput({ op: 'scroll', dx: event.deltaX, dy: event.deltaY })
+  }, [controlling, onInput])
+
+  const onKeyDown = useCallback(event => {
+    if (!controlling) return
+    event.preventDefault()
+    const mapped = KEY_MAP[event.key]
+    if (mapped) {
+      onInput({ op: 'key', key: mapped, mods: activeMods(event) })
+      return
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      if (event.key.length === 1) onInput({ op: 'key', key: event.key, mods: activeMods(event) })
+      return
+    }
+    if (event.key.length === 1) onInput({ op: 'text', text: event.key })
+  }, [controlling, onInput])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    const resize = () => {
+      const box = canvas.getBoundingClientRect()
+      const ratio = window.devicePixelRatio || 1
+      canvas.width = Math.max(1, Math.round(box.width * ratio))
+      canvas.height = Math.max(1, Math.round(box.height * ratio))
+      draw()
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(canvas)
+    resize()
+    return () => observer.disconnect()
+  }, [draw])
+
+  useEffect(() => {
+    if (!dataUrl) return undefined
+    const image = new Image()
+    image.onload = () => {
+      imageRef.current = image
+      draw()
+    }
+    image.src = dataUrl
+    return () => { image.onload = null }
+  }, [dataUrl, draw])
+
+  return jsx('canvas', {
+    ref: canvasRef,
+    'aria-label': 'Captured desktop frame',
+    tabIndex: controlling ? 0 : undefined,
+    onMouseMove: controlling ? onMouseMove : undefined,
+    onMouseDown: controlling ? onMouseDown : undefined,
+    onMouseUp: controlling ? onMouseUp : undefined,
+    onWheel: controlling ? onWheel : undefined,
+    onContextMenu: controlling ? (event => event.preventDefault()) : undefined,
+    onKeyDown: controlling ? onKeyDown : undefined,
+    style: {
+      display: 'block',
+      width: '100%',
+      height: '100%',
+      cursor: controlling ? 'crosshair' : 'default',
+      outline: 'none'
+    }
+  })
+}
+
+function ConfigForm({ ctx, onSaved }) {
+  const [url, setUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [node, setNode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    ctx.rest('/config/proxmox')
+      .then(cfg => { setUrl(cfg.url || ''); setNode(cfg.node || '') })
+      .catch(() => {})
+  }, [ctx])
+
+  const save = () => {
+    setBusy(true)
+    setError(null)
+    ctx.rest('/config/proxmox', { method: 'POST', body: { url, token, node } })
+      .then(() => { setBusy(false); onSaved() })
+      .catch(err => { setBusy(false); setError(err) })
+  }
+
+  const field = (label, value, onChange, type) => jsxs('label', {
+    style: {
+      display: 'flex', flexDirection: 'column', gap: '4px',
+      fontSize: '12px', color: 'var(--ui-text-secondary)'
+    },
+    children: [
+      label,
+      jsx('input', {
+        type: type || 'text',
+        value,
+        onChange: event => onChange(event.target.value),
+        style: {
+          padding: '6px 8px', fontSize: '13px', borderRadius: '4px',
+          border: '1px solid var(--ui-stroke-secondary)',
+          background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-primary)'
+        }
+      })
+    ]
+  })
+
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '16px', maxWidth: '440px' },
+    children: [
+      jsx('div', {
+        style: { fontWeight: 600, fontSize: '13px', color: 'var(--ui-text-primary)' },
+        children: 'Connect a Proxmox host'
+      }),
+      field('Proxmox URL (https://host:8006)', url, setUrl),
+      field('API token (user@realm!id=secret)', token, setToken, 'password'),
+      field('Node', node, setNode),
+      error
+        ? jsx('span', {
+            style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
+            children: String(error.message || error)
+          })
+        : null,
+      jsx(Button, { size: 'sm', disabled: busy || !url || !node, onClick: save, children: busy ? 'Saving…' : 'Save' })
+    ]
+  })
+}
+
+function TargetPicker({ targets, value, onChange }) {
+  if (!targets || targets.length < 2) return null
+  return jsx('select', {
+    value,
+    onChange: event => onChange(event.target.value),
+    style: { fontSize: '12px', color: 'var(--ui-text-secondary)' },
+    children: targets.map(t => jsx('option', { value: t.id, children: t.label }, t.id))
+  })
+}
+
+function OutputPicker({ outputs, value, onChange }) {
+  if (!outputs || outputs.length < 2) return null
+  return jsx('select', {
+    value: value ?? '',
+    onChange: event => onChange(event.target.value || null),
+    style: { fontSize: '12px', color: 'var(--ui-text-secondary)' },
+    children: [
+      jsx('option', { value: '', children: `All screens (${outputs.length})` }, ''),
+      ...outputs.map(o => jsx('option', {
+        value: o.name,
+        children: `${o.name} · ${o.width}x${o.height}`
+      }, o.name))
+    ]
+  })
+}
+
+function DesktopBridgePane({ ctx }) {
+  const queryClient = useQueryClient()
+  // `undefined` means not initialized yet; `null` remains the user's explicit
+  // "All screens" choice. This lets the first enabled output be the default
+  // without immediately overriding a later manual switch back to all screens.
+  const [outputName, setOutputName] = useState(undefined)
+  const [connected, setConnected] = useState(true)
+  const [startError, setStartError] = useState(null)
+  const [pushedFrame, setPushedFrame] = useState(null)
+  const [target, setTarget] = useState('local')
+  const lastFrameRef = useRef(0)
+
+  const [profile, setProfile] = useState(() => {
+    try { return host?.state?.profile?.get?.() || 'default' } catch (_) { return 'default' }
+  })
+
+  useEffect(() => {
+    const atom = host?.state?.profile
+    if (!atom || typeof atom.listen !== 'function') return undefined
+    return atom.listen(() => setProfile(atom.get() || 'default'))
+  }, [])
+
+  const targets = useQuery({
+    queryKey: [ID, 'targets'],
+    queryFn: () => ctx.rest('/targets'),
+    staleTime: 30000
+  })
+
+  const bindings = useQuery({
+    queryKey: [ID, 'binding'],
+    queryFn: () => ctx.rest('/binding'),
+    staleTime: 30000
+  })
+
+  useEffect(() => {
+    const map = bindings.data?.bindings
+    if (!map) return
+    setTarget(map[profile] || 'local')
+  }, [profile, bindings.data])
+
+  const pickTarget = useCallback(id => {
+    setTarget(id)
+    if (id !== '__connect__') {
+      ctx.rest('/binding', { method: 'POST', body: { profile, target: id } }).catch(() => {})
+    }
+  }, [ctx, profile])
+
+  const sendInput = useCallback(cmd => {
+    ctx.rest('/input', { method: 'POST', body: cmd }).catch(() => {})
+  }, [ctx])
+
+  // Polling is the BASE path: ctx.socket resolves to a no-op on OAuth remotes.
+  const status = useQuery({
+    queryKey: keys.status,
+    queryFn: () => ctx.rest('/status'),
+    refetchInterval: POLL_MS
+  })
+
+  const version = status.data?.frame_version
+  // Pixels are keyed by version, so the ~1.4 MB payload is fetched once per
+  // frame instead of on every poll tick.
+  const frame = useQuery({
+    queryKey: keys.frame(version),
+    queryFn: () => ctx.rest(`/frame-data?version=${encodeURIComponent(version)}`),
+    enabled: Boolean(version),
+    staleTime: Infinity
+  })
+
+  // Auto-start: the stream is the interaction, not a button. The cleanup is
+  // what keeps a PipeWire pipeline from outliving the pane the user closed.
+  useEffect(() => {
+    if (!connected || target === '__connect__') return undefined
+    let dropped = false
+    setStartError(null)
+    ctx.rest('/live/start', {
+      method: 'POST',
+      body: { fps: FPS, target },
+      timeoutMs: 200000
+    })
+      .then(() => { if (!dropped) queryClient.invalidateQueries({ queryKey: keys.status }) })
+      .catch(error => { if (!dropped) setStartError(error) })
+    return () => { dropped = true }
+  }, [connected, ctx, queryClient, target])
+
+  useEffect(() => () => {
+    ctx.rest('/live/stop', { method: 'POST' }).catch(() => {})
+  }, [ctx])
+
+  // The socket only accelerates invalidation; it never becomes the only path.
+  // Keying the pixel query by version means frames arriving mid-fetch simply
+  // move the key forward — the stale one is dropped instead of queued.
+  useEffect(() => ctx.socket('/events', message => {
+    if (message?.type === 'frame' && message.data_url) {
+      const receivedAt = Date.now()
+      lastFrameRef.current = receivedAt
+      setPushedFrame({ ...message, receivedAt })
+      return
+    }
+    if (message && (message.type === 'ready' || message.type === 'stream')) {
+      queryClient.invalidateQueries({ queryKey: keys.status })
+    }
+  }), [ctx, queryClient])
+
+  useEffect(() => {
+    if (version) lastFrameRef.current = Date.now()
+  }, [version])
+
+  const outputs = (status.data?.outputs || []).filter(o => o.enabled !== false)
+  useEffect(() => {
+    if (outputName === undefined && outputs.length > 0) {
+      setOutputName(outputs[0].name)
+    }
+  }, [outputName, outputs])
+
+  // Only an unreachable backend is fatal. A refused portal session is not —
+  // that one keeps the toolbar so Connect can try again.
+  const failure = status.error || frame.error
+  if (failure) {
+    return jsx(ErrorState, {
+      title: 'Desktop bridge unavailable',
+      description: String(failure.message || failure)
+    })
+  }
+
+  // Crop region in stream coordinates. The portal hands us ONE bounding-box
+  // stream; each output's x/y/width/height inside it comes from the geometry
+  // model verified against real pixels (step 2).
+  const selected = outputs.find(o => o.name === outputName) || null
+  const region = selected ? { x: selected.x, y: selected.y, width: selected.width, height: selected.height } : null
+  const blank = status.data?.frame_blank
+  const socketFresh = Boolean(pushedFrame && Date.now() - pushedFrame.receivedAt <= STALL_MS)
+  const dataUrl = socketFresh
+    ? pushedFrame.data_url
+    : (frame.data?.data_url || pushedFrame?.data_url)
+  const effectiveVersion = pushedFrame?.frame_version || version
+  const state = connectionState({
+    connected,
+    failed: startError,
+    live: status.data?.live,
+    version: effectiveVersion,
+    lastFrameAt: lastFrameRef.current,
+    now: Date.now()
+  })
+
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 },
+    children: [
+      jsxs('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '6px 8px', borderBottom: '1px solid var(--ui-stroke-secondary)'
+        },
+        children: [
+          jsx(TargetPicker, {
+            targets: [
+              ...(targets.data?.targets || [{ id: 'local', label: 'Local desktop' }]),
+              { id: '__connect__', label: 'Connect to new…' }
+            ],
+            value: target,
+            onChange: pickTarget
+          }),
+          target === 'local'
+            ? jsx(OutputPicker, { outputs, value: outputName, onChange: setOutputName })
+            : null,
+          jsx('span', {
+            style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
+            children: STATE_LABEL[state]
+          }),
+          blank && state !== 'blank'
+            ? jsx('span', {
+                style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
+                children: 'Blank frame'
+              })
+            : null
+        ]
+      }),
+      jsx('div', {
+        style: { flex: 1, minHeight: 0, overflow: 'auto' },
+        children: target === '__connect__'
+          ? jsx(ConfigForm, {
+              ctx,
+              onSaved: () => {
+                queryClient.invalidateQueries({ queryKey: [ID, 'targets'] })
+                setTarget('local')
+              }
+            })
+          : dataUrl
+            ? jsx(FrameCanvas, { dataUrl, region, controlling: target !== 'local' && target !== '__connect__' && state === 'live', onInput: sendInput })
+            : jsx(EmptyState, {
+                title: STATE_LABEL[state],
+                description: startError
+                  ? String(startError.message || startError)
+                  : 'Waiting for the session. KDE asks for consent once.'
+              })
+      })
+    ]
+  })
+}
+
+export default {
+  id: ID,
+  name: 'Desktop Bridge',
+  description: 'Capability-first desktop capture through the Hermes gateway.',
+  defaultEnabled: true,
+  register(ctx) {
+    const contribution = {
+      id: 'viewer',
+      area: PANES_AREA,
+      title: 'Computer',
+      data: {
+        placement: 'main',
+        width: '320px',
+        minWidth: '200px',
+        height: '320px',
+        dock: { pane: 'hermes-bots:routines', pos: 'top', enforce: true }
+      },
+      render: () => jsx(DesktopBridgePane, { ctx })
+    }
+
+    const $botMode = typeof host?.paneVisibility === 'function' ? host.paneVisibility('hermes-bots:pane') : null
+    const $chat = host?.state?.focusedStoredSessionId ?? null
+    if ($botMode && $chat && typeof $botMode.listen === 'function' && typeof $chat.listen === 'function') {
+      let dispose = null
+      const sync = () => {
+        const active = Boolean($botMode.get()) && Boolean($chat.get())
+        if (active && !dispose) {
+          dispose = ctx.register(contribution)
+        } else if (!active && dispose) {
+          try { dispose() } catch (_) {}
+          dispose = null
+        }
+      }
+      sync()
+      $botMode.listen(sync)
+      $chat.listen(sync)
+    } else {
+      ctx.register(contribution)
+    }
+  }
+}
