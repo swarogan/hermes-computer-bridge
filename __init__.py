@@ -25,23 +25,48 @@ from hermes_computer_bridge.errors import (  # noqa: E402
 from hermes_computer_bridge.input_protocol import input_calls  # noqa: E402
 from hermes_computer_bridge.input_service import default_input_service  # noqa: E402
 from hermes_computer_bridge import live_registry  # noqa: E402
+from hermes_computer_bridge.targets import list_targets, parse_target, proxmox_config  # noqa: E402
+from hermes_computer_bridge.agent_vnc import AgentVnc  # noqa: E402
 
 EVIDENCE_DIR = PLUGIN_DIR / "evidence"
 DEFAULT_FRAME = EVIDENCE_DIR / "live-frame.png"
 
+_TARGET_PROP = {
+    "type": "string",
+    "description": "'local' (default) or 'vm:<id>' (e.g. 'vm:112'). See computer_bridge_targets.",
+}
+
 _service = CaptureService()
 _input_service = default_input_service()
+_agent_vnc: "AgentVnc | None" = None
 
 
-def _inject(cmd: dict[str, Any]) -> dict[str, Any]:
+def _vnc() -> AgentVnc:
+    global _agent_vnc
+    if _agent_vnc is None:
+        _agent_vnc = AgentVnc(proxmox_config)
+    return _agent_vnc
+
+
+def _inject(cmd: dict[str, Any], target: Any = None) -> dict[str, Any]:
     try:
         input_calls(cmd, 0)
     except (ValueError, KeyError, TypeError) as exc:
         return {"ok": False, "kind": "bad_request", "error": str(exc)}
+    try:
+        info = parse_target(target)
+    except ValueError as exc:
+        return {"ok": False, "kind": "bad_request", "error": str(exc)}
+
+    if info["kind"] == "vm":
+        if _vnc().send(info["vmid"], cmd):
+            return {"ok": True, "rung": info["id"]}
+        return {"ok": False, "kind": "transient", "error": "vm input not delivered"}
+
     stream = live_registry.get_current()
     if stream is not None and stream.is_running():
         if stream.send(cmd):
-            return {"ok": True, "rung": "portal-remotedesktop"}
+            return {"ok": True, "rung": "remote"}
         return {"ok": False, "kind": "transient", "error": "input not delivered"}
     try:
         rung = _input_service.inject(cmd)
@@ -57,6 +82,32 @@ def _inject(cmd: dict[str, Any]) -> dict[str, Any]:
 
 def _capture(params: dict[str, Any] | None) -> str:
     params = params or {}
+    try:
+        info = parse_target(params.get("target"))
+    except ValueError as exc:
+        return json.dumps({"ok": False, "kind": "bad_request", "error": str(exc)})
+
+    if info["kind"] == "vm":
+        out = Path(params.get("output") or (EVIDENCE_DIR / f"vm-{info['vmid']}.jpg"))
+        if not out.is_absolute():
+            out = EVIDENCE_DIR / out.name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = _vnc().screenshot(info["vmid"])
+            width, height = _vnc().dimensions(info["vmid"])
+        except Exception as exc:
+            return json.dumps({"ok": False, "kind": "transient", "error": str(exc)})
+        out.write_bytes(data)
+        return json.dumps(
+            {
+                "ok": True,
+                "output": str(out),
+                "width": width,
+                "height": height,
+                "target": info["id"],
+            }
+        )
+
     out = Path(params.get("output") or DEFAULT_FRAME)
     if not out.is_absolute():
         out = EVIDENCE_DIR / out.name
@@ -117,10 +168,33 @@ def register(ctx) -> None:  # noqa: ANN001
                         "description": "PipeWire node id; overrides stream_index.",
                     },
                     "timeout_s": {"type": "integer"},
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "'local' (default) for this desktop, or 'vm:<id>' "
+                            "(e.g. 'vm:112') for a Proxmox VM. List with "
+                            "computer_bridge_targets."
+                        ),
+                    },
                 },
             },
         },
         handler=lambda params, **kwargs: _capture(params),
+    )
+
+    ctx.register_tool(
+        name="computer_bridge_targets",
+        toolset="computer_bridge",
+        schema={
+            "name": "computer_bridge_targets",
+            "description": (
+                "List the desktops this bot can view and control: the local "
+                "desktop plus every running Proxmox VM. Use the returned 'id' "
+                "(e.g. 'vm:112') as the 'target' argument on the other tools."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+        handler=lambda params, **kwargs: json.dumps({"targets": list_targets()}),
     )
 
     ctx.register_tool(
@@ -153,6 +227,7 @@ def register(ctx) -> None:  # noqa: ANN001
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
                     "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                    "target": _TARGET_PROP,
                 },
                 "required": ["x", "y"],
             },
@@ -164,7 +239,8 @@ def register(ctx) -> None:  # noqa: ANN001
                     "x": (params or {}).get("x"),
                     "y": (params or {}).get("y"),
                     "button": (params or {}).get("button", "left"),
-                }
+                },
+                (params or {}).get("target"),
             )
         ),
     )
@@ -177,12 +253,15 @@ def register(ctx) -> None:  # noqa: ANN001
             "description": "Type text into the focused window on the live desktop.",
             "parameters": {
                 "type": "object",
-                "properties": {"text": {"type": "string"}},
+                "properties": {"text": {"type": "string"}, "target": _TARGET_PROP},
                 "required": ["text"],
             },
         },
         handler=lambda params, **kwargs: json.dumps(
-            _inject({"op": "text", "text": (params or {}).get("text", "")})
+            _inject(
+                {"op": "text", "text": (params or {}).get("text", "")},
+                (params or {}).get("target"),
+            )
         ),
     )
 
@@ -200,6 +279,7 @@ def register(ctx) -> None:  # noqa: ANN001
                 "properties": {
                     "key": {"type": "string"},
                     "mods": {"type": "array", "items": {"type": "string"}},
+                    "target": _TARGET_PROP,
                 },
                 "required": ["key"],
             },
@@ -210,7 +290,8 @@ def register(ctx) -> None:  # noqa: ANN001
                     "op": "key",
                     "key": (params or {}).get("key"),
                     "mods": (params or {}).get("mods", []),
-                }
+                },
+                (params or {}).get("target"),
             )
         ),
     )
@@ -223,12 +304,19 @@ def register(ctx) -> None:  # noqa: ANN001
             "description": "Move the pointer to a captured-frame pixel without clicking.",
             "parameters": {
                 "type": "object",
-                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                "properties": {
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "target": _TARGET_PROP,
+                },
                 "required": ["x", "y"],
             },
         },
         handler=lambda params, **kwargs: json.dumps(
-            _inject({"op": "move", "x": (params or {}).get("x"), "y": (params or {}).get("y")})
+            _inject(
+                {"op": "move", "x": (params or {}).get("x"), "y": (params or {}).get("y")},
+                (params or {}).get("target"),
+            )
         ),
     )
 
@@ -240,7 +328,11 @@ def register(ctx) -> None:  # noqa: ANN001
             "description": "Scroll the wheel. Positive dy scrolls down, negative up.",
             "parameters": {
                 "type": "object",
-                "properties": {"dx": {"type": "number"}, "dy": {"type": "number"}},
+                "properties": {
+                    "dx": {"type": "number"},
+                    "dy": {"type": "number"},
+                    "target": _TARGET_PROP,
+                },
             },
         },
         handler=lambda params, **kwargs: json.dumps(
@@ -249,7 +341,8 @@ def register(ctx) -> None:  # noqa: ANN001
                     "op": "scroll",
                     "dx": (params or {}).get("dx", 0.0),
                     "dy": (params or {}).get("dy", 0.0),
-                }
+                },
+                (params or {}).get("target"),
             )
         ),
     )
@@ -271,6 +364,7 @@ def register(ctx) -> None:  # noqa: ANN001
                     "to_x": {"type": "integer"},
                     "to_y": {"type": "integer"},
                     "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                    "target": _TARGET_PROP,
                 },
                 "required": ["from_x", "from_y", "to_x", "to_y"],
             },
@@ -284,7 +378,8 @@ def register(ctx) -> None:  # noqa: ANN001
                     "to_x": (params or {}).get("to_x"),
                     "to_y": (params or {}).get("to_y"),
                     "button": (params or {}).get("button", "left"),
-                }
+                },
+                (params or {}).get("target"),
             )
         ),
     )

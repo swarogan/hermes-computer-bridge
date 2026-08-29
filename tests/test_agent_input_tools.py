@@ -20,7 +20,15 @@ def test_input_dispatch_prefers_the_live_stream_then_the_ladder():
     assert "live_registry.get_current()" in SRC
     assert "stream.send(cmd)" in SRC
     assert "_input_service.inject(cmd)" in SRC
-    assert "portal-remotedesktop" in SRC
+    assert "_vnc().send(info[\"vmid\"], cmd)" in SRC
+
+
+def test_a_vm_target_routes_to_its_own_vnc_session():
+    assert 'name="computer_bridge_targets"' in SRC
+    assert "list_targets()" in SRC
+    assert "parse_target(target)" in SRC
+    assert 'info["kind"] == "vm"' in SRC
+    assert "_vnc().screenshot(info[\"vmid\"])" in SRC
 
 
 def test_live_registry_round_trips_and_clears():

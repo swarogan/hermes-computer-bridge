@@ -242,24 +242,16 @@ function ConfigForm({ ctx, onSaved }) {
       .catch(err => { setBusy(false); setError(err) })
   }
 
-  const field = (label, value, onChange, type) => jsxs('label', {
+  const field = (label, value, onChange, type) => jsx('input', {
+    type: type || 'text',
+    value,
+    placeholder: label,
+    onChange: event => onChange(event.target.value),
     style: {
-      display: 'flex', flexDirection: 'column', gap: '4px',
-      fontSize: '12px', color: 'var(--ui-text-secondary)'
-    },
-    children: [
-      label,
-      jsx('input', {
-        type: type || 'text',
-        value,
-        onChange: event => onChange(event.target.value),
-        style: {
-          padding: '6px 8px', fontSize: '13px', borderRadius: '4px',
-          border: '1px solid var(--ui-stroke-secondary)',
-          background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-primary)'
-        }
-      })
-    ]
+      padding: '3px 8px', fontSize: '13px', borderRadius: '4px',
+      border: '1px solid var(--ui-stroke-secondary)',
+      background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-primary)'
+    }
   })
 
   return jsxs('div', {
