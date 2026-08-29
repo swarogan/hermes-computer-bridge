@@ -62,8 +62,9 @@ def test_pane_only_offers_a_picker_when_several_outputs_exist():
     assert "outputs.length < 2" in JS
 
 
-def test_first_enabled_output_is_selected_by_default_without_blocking_all_screens():
+def test_first_enabled_output_is_selected_by_default():
     assert "useState(undefined)" in JS
     assert "outputName === undefined && outputs.length > 0" in JS
     assert "setOutputName(outputs[0].name)" in JS
-    assert "event.target.value || null" in JS
+    # The "All screens" aggregate option was dropped: only real monitors list.
+    assert "All screens" not in JS

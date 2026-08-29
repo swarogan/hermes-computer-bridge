@@ -455,6 +455,9 @@ async def status() -> dict[str, Any]:
         body["streams_are_cached"] = bool(_last_capture)
     running = live["running"]
     body["target"] = _target
+    agent = live_registry.agent_activity()
+    body["agent_target"] = agent["target"]
+    body["agent_seq"] = agent["seq"]
     body["input"] = {
         "selected": "portal-remotedesktop" if running else _input_service.selected_name(),
         "rungs": [{"rung": "portal-remotedesktop", "available": running}]

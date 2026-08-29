@@ -57,6 +57,7 @@ def _inject(cmd: dict[str, Any], target: Any = None) -> dict[str, Any]:
         info = parse_target(target)
     except ValueError as exc:
         return {"ok": False, "kind": "bad_request", "error": str(exc)}
+    live_registry.set_agent_target(info["id"])
 
     if info["kind"] == "vm":
         if _vnc().send(info["vmid"], cmd):
@@ -86,6 +87,7 @@ def _capture(params: dict[str, Any] | None) -> str:
         info = parse_target(params.get("target"))
     except ValueError as exc:
         return json.dumps({"ok": False, "kind": "bad_request", "error": str(exc)})
+    live_registry.set_agent_target(info["id"])
 
     if info["kind"] == "vm":
         out = Path(params.get("output") or (EVIDENCE_DIR / f"vm-{info['vmid']}.jpg"))

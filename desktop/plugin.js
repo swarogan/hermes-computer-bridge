@@ -1,4 +1,4 @@
-import { Button, EmptyState, ErrorState, PANES_AREA, host, useQuery, useQueryClient } from '@hermes/plugin-sdk'
+import { Button, EmptyState, ErrorState, Input, PANES_AREA, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, host, useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -93,6 +93,8 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
     if (!canvas || !image) return
     const context = canvas.getContext('2d')
     if (!context) return
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
     context.clearRect(0, 0, canvas.width, canvas.height)
 
     let sx = 0, sy = 0, sw = image.naturalWidth, sh = image.naturalHeight
@@ -148,10 +150,8 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
   }, [controlling, onInput, toStream])
 
   const onMouseUp = useCallback(event => {
-    if (!controlling) return
-    event.preventDefault()
     onInput({ op: 'button', button: BUTTON_NAME(event.button), state: 'release' })
-  }, [controlling, onInput])
+  }, [onInput])
 
   const onWheel = useCallback(event => {
     if (!controlling) return
@@ -173,6 +173,16 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
     }
     if (event.key.length === 1) onInput({ op: 'text', text: event.key })
   }, [controlling, onInput])
+
+  useEffect(() => {
+    if (!controlling) return undefined
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('mouseup', onMouseUp)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [controlling, onKeyDown, onMouseUp])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -207,10 +217,8 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
     tabIndex: controlling ? 0 : undefined,
     onMouseMove: controlling ? onMouseMove : undefined,
     onMouseDown: controlling ? onMouseDown : undefined,
-    onMouseUp: controlling ? onMouseUp : undefined,
     onWheel: controlling ? onWheel : undefined,
     onContextMenu: controlling ? (event => event.preventDefault()) : undefined,
-    onKeyDown: controlling ? onKeyDown : undefined,
     style: {
       display: 'block',
       width: '100%',
@@ -242,16 +250,12 @@ function ConfigForm({ ctx, onSaved }) {
       .catch(err => { setBusy(false); setError(err) })
   }
 
-  const field = (label, value, onChange, type) => jsx('input', {
+  const field = (label, value, onChange, type) => jsx(Input, {
     type: type || 'text',
     value,
     placeholder: label,
-    onChange: event => onChange(event.target.value),
-    style: {
-      padding: '3px 8px', fontSize: '13px', borderRadius: '4px',
-      border: '1px solid var(--ui-stroke-secondary)',
-      background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-primary)'
-    }
+    size: 'xs',
+    onChange: event => onChange(event.target.value)
   })
 
   return jsxs('div', {
@@ -277,41 +281,56 @@ function ConfigForm({ ctx, onSaved }) {
 
 function TargetPicker({ targets, value, onChange }) {
   if (!targets || targets.length < 2) return null
-  return jsx('select', {
+  return jsxs(Select, {
     value,
-    onChange: event => onChange(event.target.value),
-    style: { fontSize: '12px', color: 'var(--ui-text-secondary)' },
-    children: targets.map(t => jsx('option', { value: t.id, children: t.label }, t.id))
+    onValueChange: onChange,
+    children: [
+      jsx(SelectTrigger, {
+        size: 'xs',
+        style: { width: 'auto', minWidth: '120px' },
+        children: jsx(SelectValue, { placeholder: 'Target' })
+      }),
+      jsx(SelectContent, {
+        children: targets.map(t => jsx(SelectItem, { value: t.id, children: t.label }, t.id))
+      })
+    ]
   })
 }
 
 function OutputPicker({ outputs, value, onChange }) {
   if (!outputs || outputs.length < 2) return null
-  return jsx('select', {
-    value: value ?? '',
-    onChange: event => onChange(event.target.value || null),
-    style: { fontSize: '12px', color: 'var(--ui-text-secondary)' },
+  return jsxs(Select, {
+    value: value ?? outputs[0].name,
+    onValueChange: onChange,
     children: [
-      jsx('option', { value: '', children: `All screens (${outputs.length})` }, ''),
-      ...outputs.map(o => jsx('option', {
-        value: o.name,
-        children: `${o.name} · ${o.width}x${o.height}`
-      }, o.name))
+      jsx(SelectTrigger, {
+        size: 'xs',
+        style: { width: 'auto', minWidth: '120px' },
+        children: jsx(SelectValue, {})
+      }),
+      jsx(SelectContent, {
+        children: outputs.map(o => jsx(SelectItem, {
+          value: o.name,
+          children: `${o.name} · ${o.width}x${o.height}`
+        }, o.name))
+      })
     ]
   })
 }
 
 function DesktopBridgePane({ ctx }) {
   const queryClient = useQueryClient()
-  // `undefined` means not initialized yet; `null` remains the user's explicit
-  // "All screens" choice. This lets the first enabled output be the default
-  // without immediately overriding a later manual switch back to all screens.
+  // `undefined` means not initialized yet; the effect below then selects the
+  // first enabled output as the default monitor.
   const [outputName, setOutputName] = useState(undefined)
   const [connected, setConnected] = useState(true)
   const [startError, setStartError] = useState(null)
   const [pushedFrame, setPushedFrame] = useState(null)
-  const [target, setTarget] = useState('local')
+  const [target, setTarget] = useState('__none__')
+  const [expanded, setExpanded] = useState(false)
+  const [frameSize, setFrameSize] = useState(null)
   const lastFrameRef = useRef(0)
+  const lastAgentSeqRef = useRef(null)
 
   const [profile, setProfile] = useState(() => {
     try { return host?.state?.profile?.get?.() || 'default' } catch (_) { return 'default' }
@@ -338,7 +357,7 @@ function DesktopBridgePane({ ctx }) {
   useEffect(() => {
     const map = bindings.data?.bindings
     if (!map) return
-    setTarget(map[profile] || 'local')
+    setTarget(map[profile] || '__none__')
   }, [profile, bindings.data])
 
   const pickTarget = useCallback(id => {
@@ -373,6 +392,10 @@ function DesktopBridgePane({ ctx }) {
   // what keeps a PipeWire pipeline from outliving the pane the user closed.
   useEffect(() => {
     if (!connected || target === '__connect__') return undefined
+    if (target === '__none__') {
+      ctx.rest('/live/stop', { method: 'POST' }).catch(() => {})
+      return undefined
+    }
     let dropped = false
     setStartError(null)
     ctx.rest('/live/start', {
@@ -388,6 +411,46 @@ function DesktopBridgePane({ ctx }) {
   useEffect(() => () => {
     ctx.rest('/live/stop', { method: 'POST' }).catch(() => {})
   }, [ctx])
+
+  useEffect(() => {
+    if (target === 'local' || target === '__connect__') setExpanded(false)
+    setFrameSize(null)
+  }, [target])
+
+  useEffect(() => {
+    const src = pushedFrame?.data_url || frame.data?.data_url
+    if (!src || frameSize) return undefined
+    const image = new Image()
+    image.onload = () => setFrameSize({ w: image.naturalWidth, h: image.naturalHeight })
+    image.src = src
+    return () => { image.onload = null }
+  }, [pushedFrame, frame.data, frameSize])
+
+  useEffect(() => {
+    const seq = status.data?.agent_seq
+    const agentTarget = status.data?.agent_target
+    if (typeof seq !== 'number') return
+    if (lastAgentSeqRef.current === null) {
+      lastAgentSeqRef.current = seq
+      return
+    }
+    if (seq === lastAgentSeqRef.current) return
+    lastAgentSeqRef.current = seq
+    if (agentTarget) setTarget(agentTarget)
+  }, [status.data])
+
+  useEffect(() => {
+    if (!expanded) return undefined
+    const onKey = event => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        event.preventDefault()
+        setExpanded(false)
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [expanded])
 
   // The socket only accelerates invalidation; it never becomes the only path.
   // Keying the pixel query by version means frames arriving mid-fetch simply
@@ -417,7 +480,7 @@ function DesktopBridgePane({ ctx }) {
 
   // Only an unreachable backend is fatal. A refused portal session is not —
   // that one keeps the toolbar so Connect can try again.
-  const failure = status.error || frame.error
+  const failure = target === '__none__' ? null : (status.error || frame.error)
   if (failure) {
     return jsx(ErrorState, {
       title: 'Desktop bridge unavailable',
@@ -444,6 +507,7 @@ function DesktopBridgePane({ ctx }) {
     lastFrameAt: lastFrameRef.current,
     now: Date.now()
   })
+  const isVm = target !== 'local' && target !== '__connect__'
 
   return jsxs('div', {
     style: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 },
@@ -456,6 +520,7 @@ function DesktopBridgePane({ ctx }) {
         children: [
           jsx(TargetPicker, {
             targets: [
+              { id: '__none__', label: 'Off' },
               ...(targets.data?.targets || [{ id: 'local', label: 'Local desktop' }]),
               { id: '__connect__', label: 'Connect to new…' }
             ],
@@ -465,10 +530,12 @@ function DesktopBridgePane({ ctx }) {
           target === 'local'
             ? jsx(OutputPicker, { outputs, value: outputName, onChange: setOutputName })
             : null,
-          jsx('span', {
-            style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
-            children: STATE_LABEL[state]
-          }),
+          target === '__none__'
+            ? null
+            : jsx('span', {
+                style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
+                children: STATE_LABEL[state]
+              }),
           blank && state !== 'blank'
             ? jsx('span', {
                 style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
@@ -479,7 +546,16 @@ function DesktopBridgePane({ ctx }) {
       }),
       jsx('div', {
         style: { flex: 1, minHeight: 0, overflow: 'auto' },
-        children: target === '__connect__'
+        children: target === '__none__'
+          ? jsx('div', {
+              style: {
+                width: '100%', height: '100%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--ui-text-secondary)', fontSize: '13px'
+              },
+              children: 'No screen'
+            })
+          : target === '__connect__'
           ? jsx(ConfigForm, {
               ctx,
               onSaved: () => {
@@ -488,14 +564,57 @@ function DesktopBridgePane({ ctx }) {
               }
             })
           : dataUrl
-            ? jsx(FrameCanvas, { dataUrl, region, controlling: target !== 'local' && target !== '__connect__' && state === 'live', onInput: sendInput })
+            ? (isVm
+                ? jsxs('div', {
+                    onClick: () => setExpanded(true),
+                    title: 'Click to control',
+                    style: { position: 'relative', width: '100%', height: '100%', cursor: 'pointer' },
+                    children: [
+                      jsx(FrameCanvas, { dataUrl, region, controlling: false, onInput: sendInput }),
+                      jsx('span', {
+                        style: {
+                          position: 'absolute', top: '6px', right: '6px',
+                          padding: '2px 6px', fontSize: '11px', borderRadius: '4px',
+                          background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-secondary)',
+                          border: '1px solid var(--ui-stroke-secondary)', pointerEvents: 'none'
+                        },
+                        children: 'Click to control'
+                      })
+                    ]
+                  })
+                : jsx(FrameCanvas, { dataUrl, region, controlling: false, onInput: sendInput }))
             : jsx(EmptyState, {
                 title: STATE_LABEL[state],
                 description: startError
                   ? String(startError.message || startError)
                   : 'Waiting for the session. KDE asks for consent once.'
               })
-      })
+      }),
+      expanded && isVm && dataUrl
+        ? jsxs('div', {
+            style: {
+              position: 'fixed', inset: 0, zIndex: 9999,
+              background: 'var(--ui-bg-primary)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            },
+            children: [
+              jsx('div', {
+                style: {
+                  width: frameSize ? `${frameSize.w}px` : '1280px',
+                  height: frameSize ? `${frameSize.h}px` : '800px',
+                  maxWidth: '100%', maxHeight: '100%'
+                },
+                children: jsx(FrameCanvas, { dataUrl, region, controlling: state === 'live', onInput: sendInput })
+              }),
+              jsx(Button, {
+                size: 'sm',
+                onClick: () => setExpanded(false),
+                style: { position: 'absolute', top: '8px', right: '8px', zIndex: 1 },
+                children: 'Close (Esc)'
+              })
+            ]
+          })
+        : null
     ]
   })
 }
@@ -515,6 +634,7 @@ export default {
         width: '320px',
         minWidth: '200px',
         height: '320px',
+        collapsible: true,
         dock: { pane: 'hermes-bots:routines', pos: 'top', enforce: true }
       },
       render: () => jsx(DesktopBridgePane, { ctx })

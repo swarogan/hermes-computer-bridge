@@ -75,7 +75,6 @@ def test_the_pane_docks_above_cronjobs():
 def test_per_monitor_crop_and_first_output_default_survive():
     assert "drawImage(image, sx, sy, sw, sh," in JS
     assert "setOutputName(outputs[0].name)" in JS
-    assert "All screens" in JS
     assert "useState(undefined)" in JS
 
 

@@ -125,7 +125,7 @@ class RfbClient:
             else:
                 raise RuntimeError(f"unexpected server message {message_type}")
 
-    async def capture(self, *, quality: int = 75) -> bytes:
+    async def capture(self, *, quality: int = 90) -> bytes:
         from PIL import Image
 
         await self._ws.send(fb_update_request(0, 0, 0, self.width, self.height))
