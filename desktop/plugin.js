@@ -81,6 +81,17 @@ function BUTTON_NAME(index) {
   return index === 2 ? 'right' : index === 1 ? 'middle' : 'left'
 }
 
+function keyEventToInput(event) {
+  const mapped = KEY_MAP[event.key]
+  if (mapped) return { op: 'key', key: mapped, mods: activeMods(event) }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    if (event.key.length === 1) return { op: 'key', key: event.key, mods: activeMods(event) }
+    return null
+  }
+  if (event.key.length === 1) return { op: 'text', text: event.key }
+  return null
+}
+
 function FrameCanvas({ dataUrl, region, controlling, onInput }) {
   const canvasRef = useRef(null)
   const imageRef = useRef(null)
@@ -159,30 +170,11 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
     onInput({ op: 'scroll', dx: event.deltaX, dy: event.deltaY })
   }, [controlling, onInput])
 
-  const onKeyDown = useCallback(event => {
-    if (!controlling) return
-    event.preventDefault()
-    const mapped = KEY_MAP[event.key]
-    if (mapped) {
-      onInput({ op: 'key', key: mapped, mods: activeMods(event) })
-      return
-    }
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-      if (event.key.length === 1) onInput({ op: 'key', key: event.key, mods: activeMods(event) })
-      return
-    }
-    if (event.key.length === 1) onInput({ op: 'text', text: event.key })
-  }, [controlling, onInput])
-
   useEffect(() => {
     if (!controlling) return undefined
-    document.addEventListener('keydown', onKeyDown)
     document.addEventListener('mouseup', onMouseUp)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-  }, [controlling, onKeyDown, onMouseUp])
+    return () => document.removeEventListener('mouseup', onMouseUp)
+  }, [controlling, onMouseUp])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -331,6 +323,7 @@ function DesktopBridgePane({ ctx }) {
   const [frameSize, setFrameSize] = useState(null)
   const lastFrameRef = useRef(0)
   const lastAgentSeqRef = useRef(null)
+  const overlayRef = useRef(null)
 
   const [profile, setProfile] = useState(() => {
     try { return host?.state?.profile?.get?.() || 'default' } catch (_) { return 'default' }
@@ -440,17 +433,20 @@ function DesktopBridgePane({ ctx }) {
   }, [status.data])
 
   useEffect(() => {
-    if (!expanded) return undefined
-    const onKey = event => {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        event.preventDefault()
-        setExpanded(false)
-      }
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
+    if (expanded) overlayRef.current?.focus()
   }, [expanded])
+
+  const onModalKey = useCallback(event => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setExpanded(false)
+      return
+    }
+    const op = keyEventToInput(event)
+    if (!op) return
+    event.preventDefault()
+    sendInput(op)
+  }, [sendInput])
 
   // The socket only accelerates invalidation; it never becomes the only path.
   // Keying the pixel query by version means frames arriving mid-fetch simply
@@ -592,9 +588,13 @@ function DesktopBridgePane({ ctx }) {
       }),
       expanded && isVm && dataUrl
         ? jsxs('div', {
+            ref: overlayRef,
+            tabIndex: 0,
+            onKeyDown: onModalKey,
+            onMouseDown: () => overlayRef.current?.focus(),
             style: {
               position: 'fixed', inset: 0, zIndex: 9999,
-              background: 'var(--ui-bg-primary)',
+              background: 'var(--ui-bg-primary)', outline: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             },
             children: [
