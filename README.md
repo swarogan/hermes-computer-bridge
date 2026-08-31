@@ -31,14 +31,16 @@ CAPTURE                            INPUT (local desktop)
 1. portal ScreenCast (PipeWire)    1. uinput virtual device
 2. wlr-screencopy                  2. wlroots virtual-pointer (wlrctl)
 3. X11 SHM                         3. XTest (xdotool)
-4. remote RFB (Proxmox VNC)        VM: RFB pointer and key events
+4. remote RFB (Proxmox or VNC)     remote: RFB pointer and key events
 ```
 
 `screenshot`, `click`, `type`, `key`, `move`, `scroll`, and `drag` are one
 small API over whichever rung answered. Local input goes through a `uinput`
 virtual device, which needs no extra consent prompt and raises no
-remote-control notification. VM input is delivered as RFB pointer and key
-events over the same VNC session that carries the picture.
+remote-control notification. Remote input is delivered as RFB pointer and key
+events over the same VNC session that carries the picture, which streams as
+incremental, zlib-compressed updates over a persistent framebuffer so only the
+changed regions travel the wire.
 
 ## Targets and per-bot binding
 
