@@ -44,7 +44,7 @@ _agent_vnc: "AgentVnc | None" = None
 def _vnc() -> AgentVnc:
     global _agent_vnc
     if _agent_vnc is None:
-        _agent_vnc = AgentVnc(proxmox_config)
+        _agent_vnc = AgentVnc()
     return _agent_vnc
 
 
@@ -59,10 +59,10 @@ def _inject(cmd: dict[str, Any], target: Any = None) -> dict[str, Any]:
         return {"ok": False, "kind": "bad_request", "error": str(exc)}
     live_registry.set_agent_target(info["id"])
 
-    if info["kind"] == "vm":
-        if _vnc().send(info["vmid"], cmd):
+    if info["kind"] in ("vm", "vnc"):
+        if _vnc().send(info, cmd):
             return {"ok": True, "rung": info["id"]}
-        return {"ok": False, "kind": "transient", "error": "vm input not delivered"}
+        return {"ok": False, "kind": "transient", "error": "remote input not delivered"}
 
     stream = live_registry.get_current()
     if stream is not None and stream.is_running():
@@ -89,14 +89,15 @@ def _capture(params: dict[str, Any] | None) -> str:
         return json.dumps({"ok": False, "kind": "bad_request", "error": str(exc)})
     live_registry.set_agent_target(info["id"])
 
-    if info["kind"] == "vm":
-        out = Path(params.get("output") or (EVIDENCE_DIR / f"vm-{info['vmid']}.jpg"))
+    if info["kind"] in ("vm", "vnc"):
+        safe = info["id"].replace(":", "-")
+        out = Path(params.get("output") or (EVIDENCE_DIR / f"{safe}.jpg"))
         if not out.is_absolute():
             out = EVIDENCE_DIR / out.name
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
-            data = _vnc().screenshot(info["vmid"])
-            width, height = _vnc().dimensions(info["vmid"])
+            data = _vnc().screenshot(info)
+            width, height = _vnc().dimensions(info)
         except Exception as exc:
             return json.dumps({"ok": False, "kind": "transient", "error": str(exc)})
         out.write_bytes(data)

@@ -225,6 +225,10 @@ function ConfigForm({ ctx, onSaved }) {
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
   const [node, setNode] = useState('')
+  const [vncLabel, setVncLabel] = useState('')
+  const [vncHost, setVncHost] = useState('')
+  const [vncPort, setVncPort] = useState('5900')
+  const [vncPass, setVncPass] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -238,7 +242,19 @@ function ConfigForm({ ctx, onSaved }) {
     setBusy(true)
     setError(null)
     ctx.rest('/config/proxmox', { method: 'POST', body: { url, token, node } })
-      .then(() => { setBusy(false); onSaved() })
+      .then(() => { setBusy(false); onSaved('local') })
+      .catch(err => { setBusy(false); setError(err) })
+  }
+
+  const saveVnc = () => {
+    setBusy(true)
+    setError(null)
+    const id = (vncLabel || vncHost).trim()
+    ctx.rest('/config/vnc', {
+      method: 'POST',
+      body: { id, label: vncLabel || vncHost, host: vncHost, port: Number(vncPort) || 5900, password: vncPass }
+    })
+      .then(() => { setBusy(false); onSaved('vnc:' + id) })
       .catch(err => { setBusy(false); setError(err) })
   }
 
@@ -250,13 +266,22 @@ function ConfigForm({ ctx, onSaved }) {
     onChange: event => onChange(event.target.value)
   })
 
+  const heading = text => jsx('div', {
+    style: { fontWeight: 600, fontSize: '13px', color: 'var(--ui-text-primary)' },
+    children: text
+  })
+
   return jsxs('div', {
     style: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '16px', maxWidth: '440px' },
     children: [
-      jsx('div', {
-        style: { fontWeight: 600, fontSize: '13px', color: 'var(--ui-text-primary)' },
-        children: 'Connect a Proxmox host'
-      }),
+      heading('Connect a VNC server'),
+      field('Name', vncLabel, setVncLabel),
+      field('Host (or IP)', vncHost, setVncHost),
+      field('Port (default 5900)', vncPort, setVncPort),
+      field('Password (optional)', vncPass, setVncPass, 'password'),
+      jsx(Button, { size: 'sm', disabled: busy || !vncHost, onClick: saveVnc, children: busy ? 'Saving…' : 'Add VNC' }),
+      jsx('div', { style: { height: '1px', background: 'var(--ui-stroke-secondary)', margin: '6px 0' } }),
+      heading('Connect a Proxmox host'),
       field('Proxmox URL (https://host:8006)', url, setUrl),
       field('API token (user@realm!id=secret)', token, setToken, 'password'),
       field('Node', node, setNode),
@@ -266,7 +291,7 @@ function ConfigForm({ ctx, onSaved }) {
             children: String(error.message || error)
           })
         : null,
-      jsx(Button, { size: 'sm', disabled: busy || !url || !node, onClick: save, children: busy ? 'Saving…' : 'Save' })
+      jsx(Button, { size: 'sm', disabled: busy || !url || !node, onClick: save, children: busy ? 'Saving…' : 'Save Proxmox' })
     ]
   })
 }
@@ -509,7 +534,7 @@ function DesktopBridgePane({ ctx }) {
     lastFrameAt: lastFrameRef.current,
     now: Date.now()
   })
-  const isVm = target !== 'local' && target !== '__connect__'
+  const isVm = target !== 'local' && target !== '__connect__' && target !== '__none__'
 
   return jsxs('div', {
     style: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 },
@@ -560,9 +585,9 @@ function DesktopBridgePane({ ctx }) {
           : target === '__connect__'
           ? jsx(ConfigForm, {
               ctx,
-              onSaved: () => {
+              onSaved: (next) => {
                 queryClient.invalidateQueries({ queryKey: [ID, 'targets'] })
-                setTarget('local')
+                setTarget(next || 'local')
               }
             })
           : dataUrl

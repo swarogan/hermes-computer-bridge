@@ -39,7 +39,14 @@ from hermes_computer_bridge.geometry import frame_to_logical  # noqa: E402
 from hermes_computer_bridge.input_protocol import input_calls  # noqa: E402
 from hermes_computer_bridge.input_service import default_input_service  # noqa: E402
 from hermes_computer_bridge import live_registry  # noqa: E402
-from hermes_computer_bridge.targets import list_targets, parse_target, proxmox_config  # noqa: E402
+from hermes_computer_bridge.targets import (  # noqa: E402
+    delete_vnc_endpoint,
+    list_targets,
+    parse_target,
+    proxmox_config,
+    save_vnc_endpoint,
+    vnc_endpoints,
+)
 from hermes_computer_bridge.vnc_session import VncSession  # noqa: E402
 from hermes_computer_bridge.live_stream import (  # noqa: E402
     DEFAULT_FPS,
@@ -250,9 +257,8 @@ async def _start_locked(req: LiveStartRequest) -> dict[str, Any]:
     target = parse_target(req.target)
     _target = target["id"]
 
-    if target["kind"] == "vm":
-        cfg = proxmox_config()
-        if not cfg:
+    if target["kind"] in ("vm", "vnc"):
+        if target["kind"] == "vm" and not proxmox_config():
             raise HTTPException(status_code=501, detail="Proxmox not configured")
         if _live is not None:
             await asyncio.to_thread(_live.stop)
@@ -261,10 +267,7 @@ async def _start_locked(req: LiveStartRequest) -> dict[str, Any]:
         if _vnc is not None:
             await _vnc.stop()
         _vnc = VncSession(
-            url=cfg["url"],
-            token=cfg["token"],
-            node=cfg["node"],
-            vmid=target["vmid"],
+            descriptor=target,
             output=LIVE_STREAM_FRAME,
             on_frame=_broadcast_frame,
             fps=req.fps,
@@ -391,6 +394,46 @@ async def set_proxmox(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not resolved_token:
         raise HTTPException(status_code=400, detail="token is required")
     await asyncio.to_thread(_write_proxmox_file, url, resolved_token, node)
+    return {"ok": True, "targets": await asyncio.to_thread(list_targets)}
+
+
+@router.get("/config/vnc")
+async def get_vnc() -> dict[str, Any]:
+    endpoints = await asyncio.to_thread(vnc_endpoints)
+    return {
+        "endpoints": [
+            {
+                "id": e["id"],
+                "label": e.get("label", ""),
+                "host": e.get("host", ""),
+                "port": e.get("port", 5900),
+                "has_password": bool(e.get("password")),
+            }
+            for e in endpoints
+        ]
+    }
+
+
+@router.post("/config/vnc")
+async def set_vnc(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    host = str(body.get("host") or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="host is required")
+    endpoint_id = str(body.get("id") or host).strip()
+    endpoint = {
+        "id": endpoint_id,
+        "label": str(body.get("label") or endpoint_id).strip(),
+        "host": host,
+        "port": int(body.get("port") or 5900),
+        "password": str(body.get("password") or ""),
+    }
+    await asyncio.to_thread(save_vnc_endpoint, endpoint)
+    return {"ok": True, "targets": await asyncio.to_thread(list_targets)}
+
+
+@router.delete("/config/vnc")
+async def remove_vnc(id: str = Query(...)) -> dict[str, Any]:
+    await asyncio.to_thread(delete_vnc_endpoint, id)
     return {"ok": True, "targets": await asyncio.to_thread(list_targets)}
 
 

@@ -41,6 +41,46 @@ def fb_update_request(incremental: int, x: int, y: int, w: int, h: int) -> bytes
     return struct.pack(">BBHHHH", 3, incremental, x, y, w, h)
 
 
+class _WsTransport:
+    def __init__(self, ws: Any) -> None:
+        self._ws = ws
+
+    async def recv(self) -> bytes:
+        data = await self._ws.recv()
+        return data.encode() if isinstance(data, str) else data
+
+    async def send(self, data: bytes) -> None:
+        await self._ws.send(data)
+
+    async def close(self) -> None:
+        await self._ws.close()
+
+
+class _TcpTransport:
+    def __init__(self, reader: Any, writer: Any) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def recv(self) -> bytes:
+        data = await self._reader.read(65536)
+        if not data:
+            raise ConnectionError("VNC connection closed")
+        return data
+
+    async def send(self, data: bytes) -> None:
+        self._writer.write(data)
+        await self._writer.drain()
+
+    async def close(self) -> None:
+        self._writer.close()
+
+
+def _parse_tcp(uri: str) -> tuple[str, int]:
+    rest = uri.split("://", 1)[1] if "://" in uri else uri
+    host, _, port = rest.partition(":")
+    return host, int(port or 5900)
+
+
 class RfbClient:
     def __init__(
         self,
@@ -71,14 +111,23 @@ class RfbClient:
         return out
 
     async def connect(self) -> dict:
-        import websockets
+        if self.uri.startswith(("ws://", "wss://")):
+            import websockets
 
-        self._ws = await websockets.connect(
-            self.uri,
-            additional_headers=self.headers,
-            ssl=self.ssl_context,
-            max_size=None,
-        )
+            ws = await websockets.connect(
+                self.uri,
+                additional_headers=self.headers,
+                ssl=self.ssl_context,
+                max_size=None,
+            )
+            self._ws = _WsTransport(ws)
+        else:
+            import asyncio
+
+            host, port = _parse_tcp(self.uri)
+            reader, writer = await asyncio.open_connection(host, port, ssl=self.ssl_context)
+            self._ws = _TcpTransport(reader, writer)
+
         await self._recvn(12)
         await self._ws.send(b"RFB 003.008\n")
         count = (await self._recvn(1))[0]
@@ -86,14 +135,7 @@ class RfbClient:
             reason_len = struct.unpack(">I", await self._recvn(4))[0]
             raise RuntimeError((await self._recvn(reason_len)).decode("utf-8", "replace"))
         types = await self._recvn(count)
-        if 2 not in types:
-            raise RuntimeError(f"server offers no VNC auth: {list(types)}")
-        await self._ws.send(bytes([2]))
-        challenge = await self._recvn(16)
-        await self._ws.send(vnc_auth_response(challenge, self.password))
-        result = struct.unpack(">I", await self._recvn(4))[0]
-        if result != 0:
-            raise RuntimeError("VNC authentication failed")
+        await self._authenticate(list(types))
         await self._ws.send(bytes([1]))
         head = await self._recvn(24)
         self.width, self.height = struct.unpack(">HH", head[:4])
@@ -102,6 +144,29 @@ class RfbClient:
         await self._ws.send(set_pixel_format_msg())
         await self._ws.send(set_encodings_msg([0]))
         return {"width": self.width, "height": self.height, "name": self.name}
+
+    async def _authenticate(self, types: list[int]) -> None:
+        if 2 in types and self.password:
+            await self._ws.send(bytes([2]))
+            challenge = await self._recvn(16)
+            await self._ws.send(vnc_auth_response(challenge, self.password))
+        elif 1 in types:
+            await self._ws.send(bytes([1]))
+        elif 2 in types:
+            await self._ws.send(bytes([2]))
+            challenge = await self._recvn(16)
+            await self._ws.send(vnc_auth_response(challenge, self.password))
+        else:
+            raise RuntimeError(f"no supported VNC auth offered: {types}")
+        result = struct.unpack(">I", await self._recvn(4))[0]
+        if result != 0:
+            reason = b""
+            try:
+                reason_len = struct.unpack(">I", await self._recvn(4))[0]
+                reason = await self._recvn(reason_len)
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(reason.decode("utf-8", "replace") or "VNC authentication failed")
 
     async def send(self, cmd: dict) -> None:
         for message in self._input.encode(cmd):

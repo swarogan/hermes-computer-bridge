@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import ssl
 import threading
-from typing import Any, Callable, Optional
+from typing import Any
 
 
 class AgentVnc:
-    def __init__(self, config_provider: Callable[[], Optional[dict]]) -> None:
-        self._config = config_provider
+    def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        self._clients: dict[int, Any] = {}
+        self._clients: dict[str, Any] = {}
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -21,65 +19,50 @@ class AgentVnc:
     def _call(self, coro, timeout: float = 30.0):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=timeout)
 
-    async def _ensure(self, vmid: int):
-        client = self._clients.get(vmid)
+    async def _ensure(self, descriptor: dict):
+        key = descriptor["id"]
+        client = self._clients.get(key)
         if client is not None:
             return client
-        cfg = self._config()
-        if not cfg:
-            raise RuntimeError("Proxmox not configured")
-        from hermes_computer_bridge.proxmox_client import ProxmoxClient
-        from hermes_computer_bridge.rfb_client import RfbClient
+        from hermes_computer_bridge.vnc_connect import open_rfb
 
-        proxmox = ProxmoxClient(cfg["url"], cfg["token"])
-        proxy = await asyncio.to_thread(proxmox.vncproxy, cfg["node"], vmid)
-        uri = proxmox.websocket_uri(cfg["node"], vmid, proxy["port"], proxy["ticket"])
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        rfb = RfbClient(
-            uri,
-            proxy["ticket"].encode(),
-            headers={"Authorization": cfg["token"]},
-            ssl_context=context,
-        )
-        await rfb.connect()
-        self._clients[vmid] = rfb
-        return rfb
+        client = await open_rfb(descriptor)
+        self._clients[key] = client
+        return client
 
-    def _drop(self, vmid: int) -> None:
-        client = self._clients.pop(vmid, None)
+    def _drop(self, descriptor: dict) -> None:
+        client = self._clients.pop(descriptor["id"], None)
         if client is not None:
             try:
                 self._call(client.close(), timeout=5)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
-    def send(self, vmid: int, cmd: dict) -> bool:
+    def send(self, descriptor: dict, cmd: dict) -> bool:
         try:
-            self._call(self._send(vmid, cmd))
+            self._call(self._send(descriptor, cmd))
             return True
-        except Exception:
-            self._drop(vmid)
+        except Exception:  # noqa: BLE001
+            self._drop(descriptor)
             return False
 
-    async def _send(self, vmid: int, cmd: dict) -> None:
-        rfb = await self._ensure(vmid)
+    async def _send(self, descriptor: dict, cmd: dict) -> None:
+        rfb = await self._ensure(descriptor)
         await rfb.send(cmd)
 
-    def screenshot(self, vmid: int) -> bytes:
+    def screenshot(self, descriptor: dict) -> bytes:
         try:
-            return self._call(self._screenshot(vmid))
+            return self._call(self._screenshot(descriptor))
         except Exception:
-            self._drop(vmid)
+            self._drop(descriptor)
             raise
 
-    async def _screenshot(self, vmid: int) -> bytes:
-        rfb = await self._ensure(vmid)
+    async def _screenshot(self, descriptor: dict) -> bytes:
+        rfb = await self._ensure(descriptor)
         return await rfb.capture()
 
-    def dimensions(self, vmid: int) -> tuple[int, int]:
-        rfb = self._call(self._ensure(vmid))
+    def dimensions(self, descriptor: dict) -> tuple[int, int]:
+        rfb = self._call(self._ensure(descriptor))
         return (rfb.width, rfb.height)
 
 

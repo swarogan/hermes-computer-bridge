@@ -25,23 +25,15 @@ class VncSession:
     def __init__(
         self,
         *,
-        url: str,
-        token: str,
-        node: str,
-        vmid: int,
+        descriptor: dict,
         output: Path,
         on_frame: Optional[Callable[[Path], Awaitable[None]]] = None,
         fps: int = 8,
-        ssl_context: Optional[ssl.SSLContext] = None,
     ) -> None:
-        self.url = url
-        self.token = token
-        self.node = node
-        self.vmid = vmid
+        self.descriptor = descriptor
         self.output = Path(output)
         self.on_frame = on_frame
         self.fps = max(1, int(fps))
-        self.ssl_context = ssl_context or _insecure_ssl()
         self.info: dict[str, Any] = {}
         self.last_error: Optional[str] = None
         self.frames = 0
@@ -50,19 +42,10 @@ class VncSession:
         self._running = False
 
     async def start(self) -> dict[str, Any]:
-        from hermes_computer_bridge.proxmox_client import ProxmoxClient
-        from hermes_computer_bridge.rfb_client import RfbClient
+        from hermes_computer_bridge.vnc_connect import open_rfb
 
-        client = ProxmoxClient(self.url, self.token)
-        proxy = await asyncio.to_thread(client.vncproxy, self.node, self.vmid)
-        uri = client.websocket_uri(self.node, self.vmid, proxy["port"], proxy["ticket"])
-        self._rfb = RfbClient(
-            uri,
-            proxy["ticket"].encode(),
-            headers={"Authorization": self.token},
-            ssl_context=self.ssl_context,
-        )
-        self.info = await self._rfb.connect()
+        self._rfb = await open_rfb(self.descriptor)
+        self.info = {"width": self._rfb.width, "height": self._rfb.height, "name": self._rfb.name}
         self._running = True
         self._task = asyncio.create_task(self._loop())
         return self.info
