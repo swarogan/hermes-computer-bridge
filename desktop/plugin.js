@@ -218,14 +218,36 @@ function ConfigForm({ ctx, onSaved }) {
   const [vncHost, setVncHost] = useState('')
   const [vncPort, setVncPort] = useState('5900')
   const [vncPass, setVncPass] = useState('')
+  const [vncList, setVncList] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+
+  const loadVnc = () => {
+    ctx.rest('/config/vnc')
+      .then(r => setVncList((r && r.endpoints) || []))
+      .catch(() => {})
+  }
 
   useEffect(() => {
     ctx.rest('/config/proxmox')
       .then(cfg => { setUrl(cfg.url || ''); setNode(cfg.node || '') })
       .catch(() => {})
+    loadVnc()
   }, [ctx])
+
+  const editVnc = ep => {
+    setVncLabel(ep.label || ep.id)
+    setVncHost(ep.host || '')
+    setVncPort(String(ep.port || 5900))
+    setVncPass('')
+  }
+
+  const deleteVnc = id => {
+    setBusy(true)
+    ctx.rest('/config/vnc?id=' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(() => { setBusy(false); loadVnc(); onSaved() })
+      .catch(err => { setBusy(false); setError(err) })
+  }
 
   const save = () => {
     setBusy(true)
@@ -269,6 +291,15 @@ function ConfigForm({ ctx, onSaved }) {
       field('Port (default 5900)', vncPort, setVncPort),
       field('Password (optional)', vncPass, setVncPass, 'password'),
       jsx(Button, { size: 'sm', disabled: busy || !vncHost, onClick: saveVnc, children: busy ? 'Saving…' : 'Add VNC' }),
+      vncList.length ? heading('Saved VNC servers') : null,
+      ...vncList.map(ep => jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--ui-text-secondary)' },
+        children: [
+          jsx('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${ep.label || ep.id} (${ep.host}:${ep.port})` }),
+          jsx(Button, { size: 'sm', onClick: () => editVnc(ep), children: 'Edit' }),
+          jsx(Button, { size: 'sm', disabled: busy, onClick: () => deleteVnc(ep.id), children: 'Delete' })
+        ]
+      }, ep.id)),
       jsx('div', { style: { height: '1px', background: 'var(--ui-stroke-secondary)', margin: '6px 0' } }),
       heading('Connect a Proxmox host'),
       field('Proxmox URL (https://host:8006)', url, setUrl),
@@ -631,7 +662,7 @@ function DesktopBridgePane({ ctx }) {
               ctx,
               onSaved: (next) => {
                 queryClient.invalidateQueries({ queryKey: [ID, 'targets'] })
-                setTarget(next || 'local')
+                if (next) setTarget(next)
               }
             })
           : dataUrl

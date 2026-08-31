@@ -83,10 +83,13 @@ def resolve_vnc_uri(endpoint: str, path: Optional[Path] = None) -> tuple[str, st
 
 
 def list_targets(
-    env: Optional[dict] = None, client_factory=None, path: Optional[Path] = None
+    env: Optional[dict] = None,
+    client_factory=None,
+    path: Optional[Path] = None,
+    vnc_path: Optional[Path] = None,
 ) -> list[dict]:
     targets = [{"id": "local", "label": "Local desktop", "kind": "local"}]
-    for endpoint in vnc_endpoints():
+    for endpoint in vnc_endpoints(vnc_path):
         targets.append(
             {
                 "id": f"vnc:{endpoint['id']}",

@@ -122,6 +122,8 @@ The repo is the source of truth; installation is a symlink, so `git pull` is
 the whole update.
 
 ```bash
+git clone https://github.com/swarogan/hermes-computer-bridge
+cd hermes-computer-bridge
 python3 scripts/install_dev.py --profile default   # idempotent symlink into ~/.hermes/plugins/
 hermes plugins enable hermes-computer-bridge         # the official enable gate
 # then restart Hermes Desktop; plugin routers mount once, at startup
@@ -134,6 +136,26 @@ Validate the install with the official tool:
 ```bash
 hermes plugins doctor . --ci
 ```
+
+## Setup
+
+1. Install and enable as above, then restart Hermes Desktop.
+2. Open a bot chat. The `Computer` pane appears in the right sidebar, docked
+   above Scheduled Jobs.
+3. From the pane's dropdown pick a target, or `Connect to new...`:
+   - **VNC server**: host, port (5900), optional password. Any VNC server
+     works (LAN box, a Windows/macOS host running one, a cloud VM).
+   - **Proxmox host**: the API URL (`https://host:8006`), an API token
+     (`user@realm!id=secret`), and the node name. Running VMs then appear in
+     the dropdown on their own.
+4. The target streams live in the pane. Click the preview for a full
+   interactive window (mouse and keyboard; `Ctrl+V` pastes the host clipboard
+   into the target; `Fullscreen` toggles size). The panel auto-follows whatever
+   the agent is working on.
+
+The chosen target is remembered per bot. There is no noVNC or websockify to
+wire up: the plugin's Python backend speaks RFB directly and the panel is just
+a canvas that draws frames.
 
 ## HTTP surface
 

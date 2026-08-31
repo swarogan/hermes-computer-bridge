@@ -39,12 +39,12 @@ def test_proxmox_config_falls_back_to_a_file(tmp_path):
 
 def test_list_targets_is_local_only_without_proxmox(tmp_path):
     absent = tmp_path / "none.json"
-    assert list_targets(env={}, path=absent) == [
+    assert list_targets(env={}, path=absent, vnc_path=absent) == [
         {"id": "local", "label": "Local desktop", "kind": "local"}
     ]
 
 
-def test_list_targets_adds_running_vms():
+def test_list_targets_adds_running_vms(tmp_path):
     class FakeClient:
         def vms(self, node):
             return [
@@ -53,7 +53,9 @@ def test_list_targets_adds_running_vms():
             ]
 
     env = {"PROXMOX_URL": "u", "PROXMOX_TOKEN": "t", "PROXMOX_NODE": "pve"}
-    targets = list_targets(env=env, client_factory=lambda cfg: FakeClient())
+    targets = list_targets(
+        env=env, client_factory=lambda cfg: FakeClient(), vnc_path=tmp_path / "none.json"
+    )
     ids = [t["id"] for t in targets]
     assert ids == ["local", "vm:112"]
     assert targets[1]["label"] == "VM 112 (mint-test)"

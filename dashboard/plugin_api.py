@@ -41,6 +41,7 @@ from hermes_computer_bridge.input_service import default_input_service  # noqa: 
 from hermes_computer_bridge import live_registry  # noqa: E402
 from hermes_computer_bridge.targets import (  # noqa: E402
     delete_vnc_endpoint,
+    find_vnc_endpoint,
     list_targets,
     parse_target,
     proxmox_config,
@@ -420,12 +421,17 @@ async def set_vnc(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not host:
         raise HTTPException(status_code=400, detail="host is required")
     endpoint_id = str(body.get("id") or host).strip()
+    password = str(body.get("password") or "")
+    if not password:
+        existing = await asyncio.to_thread(find_vnc_endpoint, endpoint_id)
+        if existing:
+            password = existing.get("password", "")
     endpoint = {
         "id": endpoint_id,
         "label": str(body.get("label") or endpoint_id).strip(),
         "host": host,
         "port": int(body.get("port") or 5900),
-        "password": str(body.get("password") or ""),
+        "password": password,
     }
     await asyncio.to_thread(save_vnc_endpoint, endpoint)
     return {"ok": True, "targets": await asyncio.to_thread(list_targets)}
