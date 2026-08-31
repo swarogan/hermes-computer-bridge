@@ -68,28 +68,18 @@ const KEY_MAP = {
   ' ': 'space'
 }
 
-function activeMods(event) {
-  const mods = []
-  if (event.ctrlKey) mods.push('ctrl')
-  if (event.shiftKey) mods.push('shift')
-  if (event.altKey) mods.push('alt')
-  if (event.metaKey) mods.push('super')
-  return mods
-}
-
 function BUTTON_NAME(index) {
   return index === 2 ? 'right' : index === 1 ? 'middle' : 'left'
 }
 
-function keyEventToInput(event) {
-  const mapped = KEY_MAP[event.key]
-  if (mapped) return { op: 'key', key: mapped, mods: activeMods(event) }
-  if (event.ctrlKey || event.metaKey || event.altKey) {
-    if (event.key.length === 1) return { op: 'key', key: event.key, mods: activeMods(event) }
-    return null
-  }
-  if (event.key.length === 1) return { op: 'text', text: event.key }
-  return null
+// Modifiers we hold as real keys (down on keydown, up on keyup) so Ctrl+click
+// and chords work. Shift is NOT held: the character itself already carries its
+// case, which keeps ordinary typing at one request per key.
+const HELD_MODS = {
+  Control: 'ctrl',
+  Alt: 'alt',
+  AltGraph: 'alt',
+  Meta: 'super'
 }
 
 function FrameCanvas({ dataUrl, region, controlling, onInput }) {
@@ -154,7 +144,6 @@ function FrameCanvas({ dataUrl, region, controlling, onInput }) {
   const onMouseDown = useCallback(event => {
     if (!controlling) return
     event.preventDefault()
-    canvasRef.current?.focus()
     const point = toStream(event)
     if (point) onInput({ op: 'move', x: point.x, y: point.y })
     onInput({ op: 'button', button: BUTTON_NAME(event.button), state: 'press' })
@@ -350,6 +339,7 @@ function DesktopBridgePane({ ctx }) {
   const lastAgentSeqRef = useRef(null)
   const overlayRef = useRef(null)
   const keyboardRef = useRef(null)
+  const heldKeysRef = useRef(new Map())
 
   const [profile, setProfile] = useState(() => {
     try { return host?.state?.profile?.get?.() || 'default' } catch (_) { return 'default' }
@@ -458,15 +448,16 @@ function DesktopBridgePane({ ctx }) {
     if (agentTarget) setTarget(agentTarget)
   }, [status.data])
 
-  useEffect(() => {
-    if (!expanded) return undefined
-    keyboardRef.current?.focus()
-    const onKeyUp = event => { if (event.key === 'Escape') setExpanded(false) }
-    window.addEventListener('keyup', onKeyUp)
-    return () => window.removeEventListener('keyup', onKeyUp)
-  }, [expanded])
+  const sendKey = useCallback((name, state) => {
+    sendInput({ op: 'key', key: name, state })
+  }, [sendInput])
 
-  const onKbKey = useCallback(event => {
+  const releaseAll = useCallback(() => {
+    heldKeysRef.current.forEach(name => sendInput({ op: 'key', key: name, state: 'release' }))
+    heldKeysRef.current.clear()
+  }, [sendInput])
+
+  const onKbDown = useCallback(event => {
     if (event.key === 'Escape') {
       event.preventDefault()
       setExpanded(false)
@@ -477,16 +468,59 @@ function DesktopBridgePane({ ctx }) {
       event.stopPropagation()
       navigator.clipboard.readText()
         .then(text => ctx.rest('/clipboard', { method: 'POST', body: { text } })
-          .then(() => sendInput({ op: 'key', key: 'v', mods: ['ctrl'] })))
+          .then(() => { sendKey('v', 'press'); sendKey('v', 'release') }))
         .catch(() => {})
       return
     }
-    const op = keyEventToInput(event)
-    if (!op) return
+    const mod = HELD_MODS[event.key]
+    if (mod) {
+      event.preventDefault()
+      event.stopPropagation()
+      heldKeysRef.current.set(event.code, mod)
+      sendKey(mod, 'press')
+      return
+    }
+    if (event.key === 'Shift' || event.key === 'CapsLock') {
+      event.preventDefault()
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
-    sendInput(op)
-  }, [sendInput, ctx])
+    if (event.key.length === 1) {
+      sendInput({ op: 'text', text: event.key })
+      return
+    }
+    const named = KEY_MAP[event.key] || (/^F\d{1,2}$/.test(event.key) ? event.key : null)
+    if (named) sendInput({ op: 'key', key: named })
+  }, [ctx, sendKey, sendInput])
+
+  const onKbUp = useCallback(event => {
+    const mod = heldKeysRef.current.get(event.code)
+    if (!mod) return
+    event.preventDefault()
+    event.stopPropagation()
+    heldKeysRef.current.delete(event.code)
+    sendKey(mod, 'release')
+  }, [sendKey])
+
+  useEffect(() => {
+    if (!expanded) return undefined
+    const focusKb = () => keyboardRef.current?.focus()
+    focusKb()
+    const raf = requestAnimationFrame(focusKb)
+    const timer = setTimeout(focusKb, 60)
+    const onEsc = event => { if (event.key === 'Escape') setExpanded(false) }
+    const onBlur = () => releaseAll()
+    window.addEventListener('keyup', onEsc)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(timer)
+      window.removeEventListener('keyup', onEsc)
+      window.removeEventListener('blur', onBlur)
+      releaseAll()
+    }
+  }, [expanded, releaseAll])
 
   // The socket only accelerates invalidation; it never becomes the only path.
   // Keying the pixel query by version means frames arriving mid-fetch simply
@@ -638,7 +672,9 @@ function DesktopBridgePane({ ctx }) {
             children: [
               jsx('textarea', {
                 ref: keyboardRef,
-                onKeyDown: onKbKey,
+                onKeyDown: onKbDown,
+                onKeyUp: onKbUp,
+                autoFocus: true,
                 'aria-hidden': 'true',
                 style: {
                   position: 'absolute', top: 0, left: 0, width: '1px', height: '1px',
