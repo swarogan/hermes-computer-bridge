@@ -324,6 +324,7 @@ function DesktopBridgePane({ ctx }) {
   const lastFrameRef = useRef(0)
   const lastAgentSeqRef = useRef(null)
   const overlayRef = useRef(null)
+  const keyboardRef = useRef(null)
 
   const [profile, setProfile] = useState(() => {
     try { return host?.state?.profile?.get?.() || 'default' } catch (_) { return 'default' }
@@ -433,10 +434,14 @@ function DesktopBridgePane({ ctx }) {
   }, [status.data])
 
   useEffect(() => {
-    if (expanded) overlayRef.current?.focus()
+    if (!expanded) return undefined
+    keyboardRef.current?.focus()
+    const onKeyUp = event => { if (event.key === 'Escape') setExpanded(false) }
+    window.addEventListener('keyup', onKeyUp)
+    return () => window.removeEventListener('keyup', onKeyUp)
   }, [expanded])
 
-  const onModalKey = useCallback(event => {
+  const onKbKey = useCallback(event => {
     if (event.key === 'Escape') {
       event.preventDefault()
       setExpanded(false)
@@ -445,6 +450,7 @@ function DesktopBridgePane({ ctx }) {
     const op = keyEventToInput(event)
     if (!op) return
     event.preventDefault()
+    event.stopPropagation()
     sendInput(op)
   }, [sendInput])
 
@@ -589,15 +595,23 @@ function DesktopBridgePane({ ctx }) {
       expanded && isVm && dataUrl
         ? jsxs('div', {
             ref: overlayRef,
-            tabIndex: 0,
-            onKeyDown: onModalKey,
-            onMouseDown: () => overlayRef.current?.focus(),
+            onMouseDown: () => keyboardRef.current?.focus(),
             style: {
               position: 'fixed', inset: 0, zIndex: 9999,
               background: 'var(--ui-bg-primary)', outline: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             },
             children: [
+              jsx('textarea', {
+                ref: keyboardRef,
+                onKeyDown: onKbKey,
+                'aria-hidden': 'true',
+                style: {
+                  position: 'absolute', top: 0, left: 0, width: '1px', height: '1px',
+                  opacity: 0, border: 'none', padding: 0, resize: 'none',
+                  pointerEvents: 'none'
+                }
+              }),
               jsx('div', {
                 style: {
                   width: frameSize ? `${Math.round(frameSize.w * 0.5)}px` : '640px',
