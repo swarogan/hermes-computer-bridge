@@ -33,7 +33,12 @@ DEFAULT_FRAME = EVIDENCE_DIR / "live-frame.png"
 
 _TARGET_PROP = {
     "type": "string",
-    "description": "'local' (default) or 'vm:<id>' (e.g. 'vm:112'). See computer_bridge_targets.",
+    "description": (
+        "Which computer to act on: 'local', 'vm:<id>' (e.g. 'vm:112'), or "
+        "'vnc:<name>'. Omit to use whatever the human has selected in the "
+        "Computer panel (see computer_bridge_targets for the list and the "
+        "current selection)."
+    ),
 }
 
 _service = CaptureService()
@@ -53,6 +58,8 @@ def _inject(cmd: dict[str, Any], target: Any = None) -> dict[str, Any]:
         input_calls(cmd, 0)
     except (ValueError, KeyError, TypeError) as exc:
         return {"ok": False, "kind": "bad_request", "error": str(exc)}
+    if target is None:
+        target = live_registry.get_panel_target()
     try:
         info = parse_target(target)
     except ValueError as exc:
@@ -83,8 +90,11 @@ def _inject(cmd: dict[str, Any], target: Any = None) -> dict[str, Any]:
 
 def _capture(params: dict[str, Any] | None) -> str:
     params = params or {}
+    target = params.get("target")
+    if target is None:
+        target = live_registry.get_panel_target()
     try:
-        info = parse_target(params.get("target"))
+        info = parse_target(target)
     except ValueError as exc:
         return json.dumps({"ok": False, "kind": "bad_request", "error": str(exc)})
     live_registry.set_agent_target(info["id"])
@@ -197,7 +207,9 @@ def register(ctx) -> None:  # noqa: ANN001
             ),
             "parameters": {"type": "object", "properties": {}},
         },
-        handler=lambda params, **kwargs: json.dumps({"targets": list_targets()}),
+        handler=lambda params, **kwargs: json.dumps(
+            {"targets": list_targets(), "current": live_registry.get_panel_target() or "local"}
+        ),
     )
 
     ctx.register_tool(
@@ -211,7 +223,9 @@ def register(ctx) -> None:  # noqa: ANN001
             ),
             "parameters": {"type": "object", "properties": {}},
         },
-        handler=lambda params, **kwargs: json.dumps(_service.probe()),
+        handler=lambda params, **kwargs: json.dumps(
+            {**_service.probe(), "current_target": live_registry.get_panel_target() or "local"}
+        ),
     )
 
     ctx.register_tool(

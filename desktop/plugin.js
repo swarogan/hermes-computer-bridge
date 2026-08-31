@@ -219,6 +219,7 @@ function ConfigForm({ ctx, onSaved }) {
   const [vncPort, setVncPort] = useState('5900')
   const [vncPass, setVncPass] = useState('')
   const [vncList, setVncList] = useState([])
+  const [editingId, setEditingId] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -236,15 +237,26 @@ function ConfigForm({ ctx, onSaved }) {
   }, [ctx])
 
   const editVnc = ep => {
+    setEditingId(ep.id)
     setVncLabel(ep.label || ep.id)
     setVncHost(ep.host || '')
     setVncPort(String(ep.port || 5900))
     setVncPass('')
   }
 
-  const deleteVnc = id => {
+  const cancelEdit = () => {
+    setEditingId(null)
+    setVncLabel('')
+    setVncHost('')
+    setVncPort('5900')
+    setVncPass('')
+  }
+
+  const deleteVnc = ep => {
+    if (typeof confirm === 'function' && !confirm(`Delete "${ep.label || ep.id}"?`)) return
     setBusy(true)
-    ctx.rest('/config/vnc?id=' + encodeURIComponent(id), { method: 'DELETE' })
+    if (editingId === ep.id) cancelEdit()
+    ctx.rest('/config/vnc?id=' + encodeURIComponent(ep.id), { method: 'DELETE' })
       .then(() => { setBusy(false); loadVnc(); onSaved() })
       .catch(err => { setBusy(false); setError(err) })
   }
@@ -260,12 +272,12 @@ function ConfigForm({ ctx, onSaved }) {
   const saveVnc = () => {
     setBusy(true)
     setError(null)
-    const id = (vncLabel || vncHost).trim()
+    const id = editingId || (vncLabel || vncHost).trim()
     ctx.rest('/config/vnc', {
       method: 'POST',
       body: { id, label: vncLabel || vncHost, host: vncHost, port: Number(vncPort) || 5900, password: vncPass }
     })
-      .then(() => { setBusy(false); onSaved('vnc:' + id) })
+      .then(() => { setBusy(false); setEditingId(null); onSaved('vnc:' + id) })
       .catch(err => { setBusy(false); setError(err) })
   }
 
@@ -282,24 +294,45 @@ function ConfigForm({ ctx, onSaved }) {
     children: text
   })
 
+  const row = ep => jsxs('div', {
+    style: {
+      display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
+      borderRadius: '4px', background: 'var(--ui-bg-secondary)',
+      border: '1px solid ' + (editingId === ep.id ? 'var(--ui-text-secondary)' : 'var(--ui-stroke-secondary)')
+    },
+    children: [
+      jsxs('div', {
+        style: { flex: 1, minWidth: 0 },
+        children: [
+          jsx('div', { style: { fontSize: '12px', color: 'var(--ui-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: ep.label || ep.id }),
+          jsx('div', { style: { fontSize: '11px', color: 'var(--ui-text-secondary)' }, children: `${ep.host}:${ep.port}` })
+        ]
+      }),
+      jsx(Button, { size: 'sm', onClick: () => editVnc(ep), children: 'Edit' }),
+      jsx(Button, { size: 'sm', disabled: busy, onClick: () => deleteVnc(ep), children: 'Delete' })
+    ]
+  }, ep.id)
+
   return jsxs('div', {
     style: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '16px', maxWidth: '440px' },
     children: [
-      heading('Connect a VNC server'),
+      heading('Saved connections'),
+      vncList.length
+        ? jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' }, children: vncList.map(row) })
+        : jsx('div', { style: { fontSize: '12px', color: 'var(--ui-text-secondary)' }, children: 'No VNC servers yet. Add one below.' }),
+      jsx('div', { style: { height: '1px', background: 'var(--ui-stroke-secondary)', margin: '6px 0' } }),
+      heading(editingId ? `Edit "${vncLabel || editingId}"` : 'Add a VNC server'),
       field('Name', vncLabel, setVncLabel),
       field('Host (or IP)', vncHost, setVncHost),
       field('Port (default 5900)', vncPort, setVncPort),
-      field('Password (optional)', vncPass, setVncPass, 'password'),
-      jsx(Button, { size: 'sm', disabled: busy || !vncHost, onClick: saveVnc, children: busy ? 'Saving…' : 'Add VNC' }),
-      vncList.length ? heading('Saved VNC servers') : null,
-      ...vncList.map(ep => jsxs('div', {
-        style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--ui-text-secondary)' },
+      field(editingId ? 'Password (blank = keep current)' : 'Password (optional)', vncPass, setVncPass, 'password'),
+      jsxs('div', {
+        style: { display: 'flex', gap: '6px' },
         children: [
-          jsx('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: `${ep.label || ep.id} (${ep.host}:${ep.port})` }),
-          jsx(Button, { size: 'sm', onClick: () => editVnc(ep), children: 'Edit' }),
-          jsx(Button, { size: 'sm', disabled: busy, onClick: () => deleteVnc(ep.id), children: 'Delete' })
+          jsx(Button, { size: 'sm', disabled: busy || !vncHost, onClick: saveVnc, children: busy ? 'Saving…' : (editingId ? 'Save changes' : 'Add VNC') }),
+          editingId ? jsx(Button, { size: 'sm', disabled: busy, onClick: cancelEdit, children: 'Cancel' }) : null
         ]
-      }, ep.id)),
+      }),
       jsx('div', { style: { height: '1px', background: 'var(--ui-stroke-secondary)', margin: '6px 0' } }),
       heading('Connect a Proxmox host'),
       field('Proxmox URL (https://host:8006)', url, setUrl),
@@ -362,6 +395,7 @@ function DesktopBridgePane({ ctx }) {
   const [outputName, setOutputName] = useState(undefined)
   const [connected, setConnected] = useState(true)
   const [startError, setStartError] = useState(null)
+  const [retryNonce, setRetryNonce] = useState(0)
   const [pushedFrame, setPushedFrame] = useState(null)
   const [target, setTarget] = useState('__none__')
   const [expanded, setExpanded] = useState(false)
@@ -386,7 +420,8 @@ function DesktopBridgePane({ ctx }) {
   const targets = useQuery({
     queryKey: [ID, 'targets'],
     queryFn: () => ctx.rest('/targets'),
-    staleTime: 30000
+    staleTime: 10000,
+    refetchInterval: 15000
   })
 
   const bindings = useQuery({
@@ -447,7 +482,13 @@ function DesktopBridgePane({ ctx }) {
       .then(() => { if (!dropped) queryClient.invalidateQueries({ queryKey: keys.status }) })
       .catch(error => { if (!dropped) setStartError(error) })
     return () => { dropped = true }
-  }, [connected, ctx, queryClient, target])
+  }, [connected, ctx, queryClient, target, retryNonce])
+
+  const retry = useCallback(() => {
+    setStartError(null)
+    queryClient.invalidateQueries({ queryKey: [ID, 'targets'] })
+    setRetryNonce(n => n + 1)
+  }, [queryClient])
 
   useEffect(() => () => {
     ctx.rest('/live/stop', { method: 'POST' }).catch(() => {})
@@ -624,7 +665,7 @@ function DesktopBridgePane({ ctx }) {
             targets: [
               { id: '__none__', label: 'Off' },
               ...(targets.data?.targets || [{ id: 'local', label: 'Local desktop' }]),
-              { id: '__connect__', label: 'Connect to new…' }
+              { id: '__connect__', label: 'Add or edit…' }
             ],
             value: target,
             onChange: pickTarget
@@ -643,6 +684,9 @@ function DesktopBridgePane({ ctx }) {
                 style: { color: 'var(--ui-text-secondary)', fontSize: '12px' },
                 children: 'Blank frame'
               })
+            : null,
+          (state === 'error' || state === 'stalled') && target !== '__none__' && target !== '__connect__'
+            ? jsx(Button, { size: 'sm', onClick: retry, children: 'Retry' })
             : null
         ]
       }),

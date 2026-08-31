@@ -41,7 +41,20 @@ async def open_rfb(descriptor: dict) -> Any:
     else:
         raise RuntimeError(f"not a remote target: {kind!r}")
 
-    await rfb.connect()
+    try:
+        await asyncio.wait_for(rfb.connect(), timeout=12)
+    except asyncio.TimeoutError:
+        try:
+            await rfb.close()
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError("VNC connect timed out (no server, wrong port, or not a VNC server?)")
+    except Exception:
+        try:
+            await rfb.close()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     return rfb
 
 

@@ -257,6 +257,7 @@ async def _start_locked(req: LiveStartRequest) -> dict[str, Any]:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     target = parse_target(req.target)
     _target = target["id"]
+    live_registry.set_panel_target(_target)
 
     if target["kind"] in ("vm", "vnc"):
         if target["kind"] == "vm" and not proxmox_config():
