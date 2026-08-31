@@ -5,7 +5,7 @@ the ability to control it. The local desktop is captured through
 `xdg-desktop-portal`, so it works the same on Wayland (KDE, GNOME, COSMIC,
 Sway, Hyprland) and on X11, because it asks the portal what it can do instead
 of branching on which desktop environment is running. The same panel can also
-view and control a Proxmox virtual machine over VNC.
+view and control a Proxmox virtual machine or any VNC server over RFB.
 
 ![The Computer pane docked above Scheduled Jobs in the Hermes Desktop right column, streaming a Proxmox VM (VM 112 mint-test) live](docs/computer-pane.png)
 
@@ -47,14 +47,18 @@ The panel has a target dropdown:
 - `Off` (default): no stream, nothing captured.
 - `Local desktop`: the machine Hermes runs on.
 - One entry per running Proxmox VM (for example `VM 112`).
-- `Connect to new...`: a form to store the Proxmox host URL, API token, and
-  node. Secrets are written to
-  `$XDG_STATE_HOME/hermes-computer-bridge/proxmox.json` (mode 0600) and never
-  enter git.
+- One entry per saved VNC server (any host, LAN or remote).
+- `Connect to new...`: a form to add a **VNC server** (host, port, optional
+  password) or a **Proxmox host** (URL, API token, node). Secrets are written
+  under `$XDG_STATE_HOME/hermes-computer-bridge/` (mode 0600) and never enter
+  git.
 
-The chosen target is remembered per bot. Selecting a VM streams it live in the
-pane; clicking the preview opens a full interactive window where you drive the
-VM with mouse and keyboard (close with the button or Esc).
+The chosen target is remembered per bot. Selecting a remote streams it live in
+the pane; clicking the preview opens a full interactive window where you drive
+it with mouse and keyboard (close with the button or Esc). Inside the window,
+`Ctrl+V` pastes the host clipboard into the target and `Copy from VM` pulls the
+target's clipboard back, so passwords and long strings do not have to be
+retyped.
 
 When the agent acts on a target, the panel follows it automatically: work on a
 VM switches the view to that VM, work on the local desktop switches it back.
@@ -124,7 +128,11 @@ hermes plugins doctor . --ci
 | POST   | `/live/start`      | open the session and stream the chosen target              |
 | POST   | `/live/stop`       | stop the stream and close the session                      |
 | GET    | `/live/status`     | running, fps, frames seen, blank flag, last error, uptime  |
-| POST   | `/input`           | forward one input op to the local ladder or the VM         |
+| POST   | `/input`           | forward one input op to the local ladder or the remote     |
+| GET    | `/clipboard`       | the remote target's clipboard text                         |
+| POST   | `/clipboard`       | set the remote target's clipboard text                     |
+| GET    | `/config/vnc`      | saved VNC endpoints (passwords masked)                     |
+| POST   | `/config/vnc`      | add or update a VNC endpoint                               |
 | GET    | `/frame-data`      | newest frame as a JSON data URL (polling fallback)         |
 | POST   | `/capture`         | one frame through the ladder (single-shot escape hatch)    |
 | GET    | `/map`             | frame pixel to logical point, or null in a dead band       |
