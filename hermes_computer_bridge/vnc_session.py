@@ -52,14 +52,35 @@ class VncSession:
 
     async def _loop(self) -> None:
         interval = 1.0 / self.fps
+        pump_task: Optional[asyncio.Task] = None
         try:
+            await self._rfb.request_full()
+            await self._rfb.pump()
+            pump_task = asyncio.create_task(self._pump_loop())
             while self._running:
-                jpg = await self._rfb.capture()
+                jpg = self._rfb.snapshot()
                 write_frame_atomically(self.output, jpg)
                 self.frames += 1
                 if self.on_frame is not None:
                     await self.on_frame(self.output)
                 await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = str(exc)
+            self._running = False
+        finally:
+            if pump_task is not None:
+                pump_task.cancel()
+                try:
+                    await pump_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _pump_loop(self) -> None:
+        try:
+            while self._running:
+                await self._rfb.pump()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

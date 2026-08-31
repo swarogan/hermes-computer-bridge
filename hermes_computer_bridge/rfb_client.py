@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import struct
+import zlib
 from typing import Any, Optional
 
 from hermes_computer_bridge.rfb_input import RfbInput
@@ -101,6 +102,8 @@ class RfbClient:
         self._ws: Any = None
         self._buf = b""
         self._input = RfbInput()
+        self._fb: Any = None
+        self._zlib: Any = None
 
     async def _recvn(self, n: int) -> bytes:
         while len(self._buf) < n:
@@ -143,7 +146,11 @@ class RfbClient:
         name_len = struct.unpack(">I", head[20:24])[0]
         self.name = (await self._recvn(name_len)).decode("utf-8", "replace")
         await self._ws.send(set_pixel_format_msg())
-        await self._ws.send(set_encodings_msg([0]))
+        await self._ws.send(set_encodings_msg([6, 1, 0]))
+        from PIL import Image
+
+        self._fb = Image.new("RGB", (self.width, self.height))
+        self._zlib = zlib.decompressobj()
         return {"width": self.width, "height": self.height, "name": self.name}
 
     async def _authenticate(self, types: list[int]) -> None:
@@ -177,42 +184,72 @@ class RfbClient:
         data = text.encode("latin-1", "replace")
         await self._ws.send(struct.pack(">BxxxI", 6, len(data)) + data)
 
-    async def _skip_non_framebuffer(self) -> None:
-        while True:
-            message_type = (await self._recvn(1))[0]
-            if message_type == 0:
-                return
-            if message_type == 1:
-                header = await self._recvn(5)
-                colours = struct.unpack(">H", header[3:5])[0]
-                await self._recvn(colours * 6)
-            elif message_type == 2:
-                continue
-            elif message_type == 3:
-                header = await self._recvn(7)
-                length = struct.unpack(">I", header[3:7])[0]
-                self.clipboard = (await self._recvn(length)).decode("latin-1")
-            else:
-                raise RuntimeError(f"unexpected server message {message_type}")
+    async def request_full(self) -> None:
+        await self._ws.send(fb_update_request(0, 0, 0, self.width, self.height))
 
-    async def capture(self, *, quality: int = 90) -> bytes:
+    async def request_incremental(self) -> None:
+        await self._ws.send(fb_update_request(1, 0, 0, self.width, self.height))
+
+    async def _apply_rects(self, count: int) -> None:
         from PIL import Image
 
-        await self._ws.send(fb_update_request(0, 0, 0, self.width, self.height))
-        await self._skip_non_framebuffer()
-        header = await self._recvn(3)
-        rectangles = struct.unpack(">H", header[1:3])[0]
-        image = Image.new("RGB", (self.width, self.height))
-        for _ in range(rectangles):
+        for _ in range(count):
             x, y, w, h, encoding = struct.unpack(">HHHHi", await self._recvn(12))
-            if encoding != 0:
+            if w == 0 or h == 0:
+                continue
+            if encoding == 0:
+                data = await self._recvn(w * h * 4)
+                self._fb.paste(Image.frombytes("RGB", (w, h), data, "raw", "BGRX"), (x, y))
+            elif encoding == 1:
+                sx, sy = struct.unpack(">HH", await self._recvn(4))
+                region = self._fb.crop((sx, sy, sx + w, sy + h))
+                self._fb.paste(region, (x, y))
+            elif encoding == 6:
+                length = struct.unpack(">I", await self._recvn(4))[0]
+                raw = self._zlib.decompress(await self._recvn(length))
+                self._fb.paste(Image.frombytes("RGB", (w, h), raw, "raw", "BGRX"), (x, y))
+            else:
                 raise RuntimeError(f"unsupported RFB encoding {encoding}")
-            data = await self._recvn(w * h * 4)
-            rect = Image.frombytes("RGB", (w, h), data, "raw", "BGRX")
-            image.paste(rect, (x, y))
+
+    async def _read_message(self) -> bool:
+        """Read one server message, applying a framebuffer update if that is
+        what it is. Returns True when a framebuffer update was applied."""
+        message_type = (await self._recvn(1))[0]
+        if message_type == 0:
+            header = await self._recvn(3)
+            await self._apply_rects(struct.unpack(">H", header[1:3])[0])
+            return True
+        if message_type == 1:
+            header = await self._recvn(5)
+            await self._recvn(struct.unpack(">H", header[3:5])[0] * 6)
+        elif message_type == 2:
+            pass
+        elif message_type == 3:
+            header = await self._recvn(7)
+            length = struct.unpack(">I", header[3:7])[0]
+            self.clipboard = (await self._recvn(length)).decode("latin-1")
+        else:
+            raise RuntimeError(f"unexpected server message {message_type}")
+        return False
+
+    async def pump(self) -> bool:
+        """Streaming: read one message and, on a framebuffer update, ask for
+        the next incremental one."""
+        updated = await self._read_message()
+        if updated:
+            await self.request_incremental()
+        return updated
+
+    def snapshot(self, *, quality: int = 90) -> bytes:
         buffer = io.BytesIO()
-        image.save(buffer, "JPEG", quality=quality)
+        self._fb.save(buffer, "JPEG", quality=quality)
         return buffer.getvalue()
+
+    async def capture(self, *, quality: int = 90) -> bytes:
+        await self.request_full()
+        while not await self._read_message():
+            continue
+        return self.snapshot(quality=quality)
 
     async def close(self) -> None:
         if self._ws is not None:
