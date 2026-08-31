@@ -65,6 +65,21 @@ retyped.
 When the agent acts on a target, the panel follows it automatically: work on a
 VM switches the view to that VM, work on the local desktop switches it back.
 
+## Viewing a Windows or macOS host
+
+`Local desktop` capture (portal ScreenCast + uinput) is Linux only. To view and
+control a Windows or macOS machine, run a VNC server on it and add it as a VNC
+target (`127.0.0.1:5900` for the local host, or its LAN address). The `connect/`
+scripts set this up:
+
+- `connect/connect-macos.sh` enables the built-in macOS Screen Sharing and sets
+  a VNC password. No third-party install, since macOS ships a VNC server.
+- `connect/connect-windows.ps1` installs a VNC server (TightVNC) via `winget`,
+  since Windows has no built-in one.
+
+Both are unverified on their target OS (this is developed on Linux); treat them
+as a starting point.
+
 ## Agent tools
 
 The agent reaches the same targets without the human touching the panel. Every
