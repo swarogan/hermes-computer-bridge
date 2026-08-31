@@ -80,7 +80,6 @@ def test_per_monitor_crop_and_first_output_default_survive():
 
 def test_remote_control_via_preview_local_is_view_only():
     assert "'/input'" in JS
-    assert "state === 'live'" in JS
     assert "target !== 'local'" in JS
     for banned in ("/click", "/type", "/key", "RemoteDesktop", "NotifyPointer"):
         assert banned not in JS, banned

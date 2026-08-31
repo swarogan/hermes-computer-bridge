@@ -240,9 +240,12 @@ class RfbClient:
             await self.request_incremental()
         return updated
 
-    def snapshot(self, *, quality: int = 90) -> bytes:
+    def snapshot(self, *, fmt: str = "JPEG", quality: int = 90) -> bytes:
         buffer = io.BytesIO()
-        self._fb.save(buffer, "JPEG", quality=quality)
+        if fmt == "PNG":
+            self._fb.save(buffer, "PNG")
+        else:
+            self._fb.save(buffer, "JPEG", quality=quality)
         return buffer.getvalue()
 
     async def capture(self, *, quality: int = 90) -> bytes:

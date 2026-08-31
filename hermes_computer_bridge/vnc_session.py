@@ -58,7 +58,7 @@ class VncSession:
             await self._rfb.pump()
             pump_task = asyncio.create_task(self._pump_loop())
             while self._running:
-                jpg = self._rfb.snapshot()
+                jpg = self._rfb.snapshot(quality=92)
                 write_frame_atomically(self.output, jpg)
                 self.frames += 1
                 if self.on_frame is not None:

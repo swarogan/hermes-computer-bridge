@@ -334,6 +334,7 @@ function DesktopBridgePane({ ctx }) {
   const [pushedFrame, setPushedFrame] = useState(null)
   const [target, setTarget] = useState('__none__')
   const [expanded, setExpanded] = useState(false)
+  const [modalFull, setModalFull] = useState(false)
   const [frameSize, setFrameSize] = useState(null)
   const lastFrameRef = useRef(0)
   const lastAgentSeqRef = useRef(null)
@@ -664,6 +665,7 @@ function DesktopBridgePane({ ctx }) {
         ? jsxs('div', {
             ref: overlayRef,
             onMouseDown: () => keyboardRef.current?.focus(),
+            onContextMenu: event => event.preventDefault(),
             style: {
               position: 'fixed', inset: 0, zIndex: 9999,
               background: 'var(--ui-bg-primary)', outline: 'none',
@@ -684,15 +686,20 @@ function DesktopBridgePane({ ctx }) {
               }),
               jsx('div', {
                 style: {
-                  width: frameSize ? `${Math.round(frameSize.w * 0.5)}px` : '640px',
-                  height: frameSize ? `${Math.round(frameSize.h * 0.5)}px` : '400px',
+                  width: modalFull ? '100%' : (frameSize ? `${Math.round(frameSize.w * 0.5)}px` : '640px'),
+                  height: modalFull ? '100%' : (frameSize ? `${Math.round(frameSize.h * 0.5)}px` : '400px'),
                   maxWidth: '100%', maxHeight: '100%'
                 },
-                children: jsx(FrameCanvas, { dataUrl, region, controlling: state === 'live', onInput: sendInput })
+                children: jsx(FrameCanvas, { dataUrl, region, controlling: true, onInput: sendInput })
               }),
               jsx('div', {
                 style: { position: 'absolute', top: '8px', right: '8px', zIndex: 1, display: 'flex', gap: '6px' },
                 children: [
+                  jsx(Button, {
+                    size: 'sm',
+                    onClick: () => setModalFull(v => !v),
+                    children: modalFull ? 'Fit' : 'Fullscreen'
+                  }),
                   jsx(Button, {
                     size: 'sm',
                     onClick: () => {
