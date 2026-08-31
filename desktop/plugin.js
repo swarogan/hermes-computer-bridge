@@ -472,12 +472,21 @@ function DesktopBridgePane({ ctx }) {
       setExpanded(false)
       return
     }
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'v' || event.key === 'V')) {
+      event.preventDefault()
+      event.stopPropagation()
+      navigator.clipboard.readText()
+        .then(text => ctx.rest('/clipboard', { method: 'POST', body: { text } })
+          .then(() => sendInput({ op: 'key', key: 'v', mods: ['ctrl'] })))
+        .catch(() => {})
+      return
+    }
     const op = keyEventToInput(event)
     if (!op) return
     event.preventDefault()
     event.stopPropagation()
     sendInput(op)
-  }, [sendInput])
+  }, [sendInput, ctx])
 
   // The socket only accelerates invalidation; it never becomes the only path.
   // Keying the pixel query by version means frames arriving mid-fetch simply
@@ -645,11 +654,24 @@ function DesktopBridgePane({ ctx }) {
                 },
                 children: jsx(FrameCanvas, { dataUrl, region, controlling: state === 'live', onInput: sendInput })
               }),
-              jsx(Button, {
-                size: 'sm',
-                onClick: () => setExpanded(false),
-                style: { position: 'absolute', top: '8px', right: '8px', zIndex: 1 },
-                children: 'Close (Esc)'
+              jsx('div', {
+                style: { position: 'absolute', top: '8px', right: '8px', zIndex: 1, display: 'flex', gap: '6px' },
+                children: [
+                  jsx(Button, {
+                    size: 'sm',
+                    onClick: () => {
+                      ctx.rest('/clipboard')
+                        .then(r => r && r.text && navigator.clipboard.writeText(r.text))
+                        .catch(() => {})
+                    },
+                    children: 'Copy from VM'
+                  }),
+                  jsx(Button, {
+                    size: 'sm',
+                    onClick: () => setExpanded(false),
+                    children: 'Close (Esc)'
+                  })
+                ]
               })
             ]
           })

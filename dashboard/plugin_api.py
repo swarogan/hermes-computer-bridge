@@ -470,6 +470,21 @@ async def live_input(cmd: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"ok": True, "rung": rung}
 
 
+@router.post("/clipboard")
+async def set_clipboard(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    text = str(body.get("text") or "")
+    if _vnc is not None and _vnc.is_running():
+        ok = await _vnc.set_clipboard(text)
+        return {"ok": ok, "target": _target}
+    return {"ok": False, "error": "no remote session"}
+
+
+@router.get("/clipboard")
+async def get_clipboard() -> dict[str, Any]:
+    text = _vnc.get_clipboard() if _vnc is not None and _vnc.is_running() else ""
+    return {"text": text}
+
+
 @router.get("/live/status")
 async def live_status_route() -> dict[str, Any]:
     return await asyncio.to_thread(live_status)

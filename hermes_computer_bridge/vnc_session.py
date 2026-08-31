@@ -76,6 +76,19 @@ class VncSession:
             self.last_error = str(exc)
             return False
 
+    async def set_clipboard(self, text: str) -> bool:
+        if self._rfb is None or not self._running:
+            return False
+        try:
+            await self._rfb.set_clipboard(text)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = str(exc)
+            return False
+
+    def get_clipboard(self) -> str:
+        return getattr(self._rfb, "clipboard", "") if self._rfb is not None else ""
+
     def is_running(self) -> bool:
         return self._running and self._task is not None and not self._task.done()
 

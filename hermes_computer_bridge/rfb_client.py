@@ -97,6 +97,7 @@ class RfbClient:
         self.width = 0
         self.height = 0
         self.name = ""
+        self.clipboard = ""
         self._ws: Any = None
         self._buf = b""
         self._input = RfbInput()
@@ -172,6 +173,10 @@ class RfbClient:
         for message in self._input.encode(cmd):
             await self._ws.send(message)
 
+    async def set_clipboard(self, text: str) -> None:
+        data = text.encode("latin-1", "replace")
+        await self._ws.send(struct.pack(">BxxxI", 6, len(data)) + data)
+
     async def _skip_non_framebuffer(self) -> None:
         while True:
             message_type = (await self._recvn(1))[0]
@@ -186,7 +191,7 @@ class RfbClient:
             elif message_type == 3:
                 header = await self._recvn(7)
                 length = struct.unpack(">I", header[3:7])[0]
-                await self._recvn(length)
+                self.clipboard = (await self._recvn(length)).decode("latin-1")
             else:
                 raise RuntimeError(f"unexpected server message {message_type}")
 
