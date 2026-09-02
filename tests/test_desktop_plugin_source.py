@@ -90,3 +90,30 @@ def test_every_referenced_sdk_identifier_is_imported():
     for name in ("Button", "EmptyState", "ErrorState", "useQuery", "useMutation"):
         if f"{name}," in JS or f"{name})" in JS or f"jsx({name}" in JS:
             assert name in imported, f"{name} used but not imported"
+
+
+def test_altgr_is_held_as_level3_shift_not_as_left_alt():
+    """AltGr on the Polish programmer layout is ISO_Level3_Shift.
+
+    Holding it as plain `alt` on the remote turns every AltGr+a into an Alt
+    chord, so the composed character never arrives.
+    """
+    assert re.search(r"AltGraph:\s*'altgr'", JS), "AltGraph must not map to alt"
+    assert not re.search(r"AltGraph:\s*'alt'", JS)
+    assert "AltRight" in JS, "AltRight is the AltGr key code on Linux browsers"
+
+
+def test_characters_travel_as_physical_keys_not_as_composed_text():
+    """QEMU's keysym table has no entry for 'ą' (0x01000105), so a composed
+    character sent as `op: 'text'` is dropped with "no scancode found for
+    keysym". Sending the physical key lets the guest's own layout compose it."""
+    down = JS[JS.index("const onKbDown"):JS.index("const onKbUp")]
+    assert "op: 'text'" not in down, "single characters must not go out as text"
+    assert re.search(r"sendKey\(event\.key, 'press', event\.code\)", down)
+    assert re.search(r"sendKey\(event\.key, 'release', event\.code\)", down)
+
+
+def test_shift_is_held_so_the_guest_can_apply_case():
+    """On the physical-key path the character no longer carries its own case:
+    an unheld Shift turns 'A' into 'a' and '!' into '1' in the guest."""
+    assert re.search(r"Shift:\s*'shift'", JS), "Shift must be a held modifier"

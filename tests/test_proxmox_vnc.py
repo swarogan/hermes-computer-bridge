@@ -54,3 +54,34 @@ def test_framebuffer_update_request_carries_the_full_rect():
     kind, incremental, x, y, w, h = struct.unpack(">BBHHHH", msg)
     assert kind == 3
     assert (incremental, x, y, w, h) == (0, 0, 0, 1280, 800)
+
+
+# --- the -258 confirmation must land before the first keystroke ---------------
+
+
+
+
+def test_pseudo_rectangle_switches_on_the_extension():
+    """QEMU announces Extended Key Event as a zero-sized rectangle inside a
+    normal FramebufferUpdate. The old `w == 0 or h == 0` skip swallowed it."""
+    import asyncio
+
+    from PIL import Image
+
+    from hermes_computer_bridge.rfb_client import QEMU_EXT_KEY_EVENT, RfbClient
+    from hermes_computer_bridge.rfb_input import RfbInput
+
+    rfb = RfbClient.__new__(RfbClient)
+    rfb._input = RfbInput()
+    rfb._fb = Image.new("RGB", (4, 4))
+    data = bytearray(struct.pack(">HHHHi", 0, 0, 0, 0, QEMU_EXT_KEY_EVENT))
+
+    async def recvn(n: int) -> bytes:
+        out = bytes(data[:n])
+        del data[:n]
+        return out
+
+    rfb._recvn = recvn
+    assert rfb._input.qemu_ext_key is False
+    asyncio.run(rfb._apply_rects(1))
+    assert rfb._input.qemu_ext_key is True, "server confirmation must be honoured"

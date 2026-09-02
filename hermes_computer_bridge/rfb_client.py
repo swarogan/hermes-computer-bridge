@@ -28,6 +28,9 @@ def vnc_auth_response(challenge: bytes, password: bytes) -> bytes:
     return encryptor.update(challenge) + encryptor.finalize()
 
 
+QEMU_EXT_KEY_EVENT = -258
+
+
 def set_pixel_format_msg() -> bytes:
     pixel_format = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
     return struct.pack(">B3x", 0) + pixel_format
@@ -146,11 +149,22 @@ class RfbClient:
         name_len = struct.unpack(">I", head[20:24])[0]
         self.name = (await self._recvn(name_len)).decode("utf-8", "replace")
         await self._ws.send(set_pixel_format_msg())
-        await self._ws.send(set_encodings_msg([6, 1, 0]))
+        # -258 asks for QEMU's Extended Key Event. The server answers by sending
+        # a zero-sized pseudo-rectangle with that encoding, which is the only
+        # signal we get; until it arrives, keys go out as plain keysyms.
+        await self._ws.send(set_encodings_msg([6, 1, 0, QEMU_EXT_KEY_EVENT]))
         from PIL import Image
 
         self._fb = Image.new("RGB", (self.width, self.height))
         self._zlib = zlib.decompressobj()
+        # The -258 confirmation only ever arrives inside a FramebufferUpdate, so
+        # draw one out now and read it here. AgentVnc — which carries every
+        # keystroke the panel sends to a VM — only ever writes to its socket, so
+        # without this its keys would go out on the keysym path forever and AltGr
+        # (ISO_Level3_Shift) would be dropped by QEMU on every press.
+        await self.request_full()
+        while not await self._read_message():
+            continue
         return {"width": self.width, "height": self.height, "name": self.name}
 
     async def _authenticate(self, types: list[int]) -> None:
@@ -195,6 +209,10 @@ class RfbClient:
 
         for _ in range(count):
             x, y, w, h, encoding = struct.unpack(">HHHHi", await self._recvn(12))
+            if encoding == QEMU_EXT_KEY_EVENT:
+                # Not pixels: the server confirming it accepts physical keycodes.
+                self._input.qemu_ext_key = True
+                continue
             if w == 0 or h == 0:
                 continue
             if encoding == 0:

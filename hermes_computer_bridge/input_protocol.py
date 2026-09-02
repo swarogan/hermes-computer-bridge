@@ -4,11 +4,21 @@ from typing import Any
 
 BUTTONS: dict[str, int] = {"left": 272, "right": 273, "middle": 274}
 
+ISO_LEVEL3_SHIFT = 0xFE03
+
+# AltGr is level-3 shift, not a second Alt: holding Alt_L instead turns every
+# AltGr+a on the Polish programmer layout into an Alt chord.
 MODIFIERS: dict[str, int] = {
     "ctrl": 0xFFE3,
     "control": 0xFFE3,
     "shift": 0xFFE1,
     "alt": 0xFFE9,
+    "alt_r": 0xFFEA,
+    "ralt": 0xFFEA,
+    "altgr": ISO_LEVEL3_SHIFT,
+    "alt_gr": ISO_LEVEL3_SHIFT,
+    "altgraph": ISO_LEVEL3_SHIFT,
+    "iso_level3_shift": ISO_LEVEL3_SHIFT,
     "super": 0xFFEB,
     "meta": 0xFFEB,
     "win": 0xFFEB,
@@ -36,6 +46,10 @@ SPECIAL_KEYS: dict[str, int] = {
     "Ctrl": 0xFFE3,
     "Shift": 0xFFE1,
     "Alt": 0xFFE9,
+    "Alt_R": 0xFFEA,
+    "AltGr": ISO_LEVEL3_SHIFT,
+    "AltGraph": ISO_LEVEL3_SHIFT,
+    "ISO_Level3_Shift": ISO_LEVEL3_SHIFT,
     "Super": 0xFFEB,
     **{f"F{n}": 0xFFBE + (n - 1) for n in range(1, 13)},
 }
@@ -130,6 +144,7 @@ def input_calls(cmd: dict, node_id: int) -> list[tuple[str, tuple]]:
 
 __all__ = [
     "BUTTONS",
+    "ISO_LEVEL3_SHIFT",
     "MODIFIERS",
     "SPECIAL_KEYS",
     "char_to_keysym",

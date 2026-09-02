@@ -6,6 +6,7 @@ from hermes_computer_bridge.input_protocol import (
     BUTTONS,
     char_to_keysym,
     input_calls,
+    key_to_keysym,
 )
 
 NODE = 52
@@ -106,3 +107,45 @@ def test_drag_presses_at_the_start_moves_then_releases_at_the_end():
         ("NotifyPointerMotionAbsolute", (NODE, 100.0, 200.0)),
         ("NotifyPointerButton", (BUTTONS["left"], 0)),
     ]
+
+
+# --- Polish programmer layout: AltGr is level-3 shift, not left Alt ---
+
+ISO_LEVEL3_SHIFT = 0xFE03
+
+
+def test_altgr_aliases_map_to_iso_level3_shift():
+    for name in ("altgr", "AltGr", "alt_gr", "AltGraph", "ISO_Level3_Shift"):
+        assert key_to_keysym(name) == ISO_LEVEL3_SHIFT, name
+
+
+def test_right_alt_keeps_its_own_keysym_distinct_from_left_alt():
+    assert key_to_keysym("alt") == 0xFFE9
+    assert key_to_keysym("alt_r") == 0xFFEA
+    assert key_to_keysym("Alt_R") == 0xFFEA
+
+
+def test_altgr_chord_wraps_the_key_in_level3_shift_not_alt():
+    calls = input_calls({"op": "key", "key": "a", "mods": ["altgr"]}, NODE)
+    assert calls == [
+        ("NotifyKeyboardKeysym", (ISO_LEVEL3_SHIFT, 1)),
+        ("NotifyKeyboardKeysym", (char_to_keysym("a"), 1)),
+        ("NotifyKeyboardKeysym", (char_to_keysym("a"), 0)),
+        ("NotifyKeyboardKeysym", (ISO_LEVEL3_SHIFT, 0)),
+    ]
+
+
+def test_polish_letters_outside_latin1_use_unicode_keysyms():
+    for char in "ąęłśźżćń":
+        assert char_to_keysym(char) == 0x01000000 | ord(char), char
+
+
+def test_polish_o_acute_keeps_its_legacy_latin1_keysym():
+    assert char_to_keysym("ó") == 0xF3
+    assert char_to_keysym("Ó") == 0xD3
+
+
+def test_ascii_keeps_its_bare_keysym():
+    assert char_to_keysym("a") == 0x61
+    assert char_to_keysym("A") == 0x41
+    assert char_to_keysym(" ") == 0x20

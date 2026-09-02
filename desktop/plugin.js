@@ -9,6 +9,9 @@ const FPS = 10
 // this window; not doing so means the pipeline stopped producing even
 // though the helper process is still up.
 const STALL_MS = 4000
+// Height of the strip the fullscreen overlay keeps for its own buttons, so the
+// bar sits above the frame instead of on top of the guest's top panel.
+const CHROME_STRIP = 40
 const keys = { status: [ID, 'status'], frame: version => [ID, 'frame', version] }
 
 /**
@@ -73,13 +76,28 @@ function BUTTON_NAME(index) {
 }
 
 // Modifiers we hold as real keys (down on keydown, up on keyup) so Ctrl+click
-// and chords work. Shift is NOT held: the character itself already carries its
-// case, which keeps ordinary typing at one request per key.
+// and chords work.
+//
+// Shift IS held. Every keystroke now travels as a physical key (see sendChar),
+// so the guest applies its own layout: an unheld Shift would turn 'A' into 'a'
+// and '!' into '1'. On the older keysym-only path the character carried its own
+// case, which is why Shift used to be skipped here.
+//
+// AltGr is level-3 shift, not a second Alt — held as `alt` it turned every
+// AltGr+a on the Polish programmer layout into an Alt chord on the remote.
 const HELD_MODS = {
   Control: 'ctrl',
+  Shift: 'shift',
   Alt: 'alt',
-  AltGraph: 'alt',
+  AltGraph: 'altgr',
   Meta: 'super'
+}
+
+// Linux browsers report the AltGr key as AltGraph, but a bare `Alt` with code
+// AltRight shows up on layouts/remotes that never enable level 3.
+function HELD_MOD_FOR(event) {
+  if (event.code === 'AltRight') return 'altgr'
+  return HELD_MODS[event.key]
 }
 
 function FrameCanvas({ dataUrl, region, controlling, onInput }) {
@@ -521,14 +539,17 @@ function DesktopBridgePane({ ctx }) {
     if (agentTarget) setTarget(agentTarget)
   }, [status.data])
 
-  const sendKey = useCallback((name, state) => {
-    sendInput({ op: 'key', key: name, state })
+  // `code` is the physical key. The backend forwards it as an XT scancode when
+  // the VNC server accepted QEMU's Extended Key Event, and ignores it otherwise,
+  // so every call carries both the code and the keysym-bearing name.
+  const sendKey = useCallback((name, state, code) => {
+    sendInput({ op: 'key', key: name, state, code })
   }, [sendInput])
 
   const releaseAll = useCallback(() => {
-    heldKeysRef.current.forEach(name => sendInput({ op: 'key', key: name, state: 'release' }))
+    heldKeysRef.current.forEach((mod, code) => sendKey(mod, 'release', code))
     heldKeysRef.current.clear()
-  }, [sendInput])
+  }, [sendKey])
 
   const onKbDown = useCallback(event => {
     if (event.key === 'Escape') {
@@ -541,30 +562,33 @@ function DesktopBridgePane({ ctx }) {
       event.stopPropagation()
       navigator.clipboard.readText()
         .then(text => ctx.rest('/clipboard', { method: 'POST', body: { text } })
-          .then(() => { sendKey('v', 'press'); sendKey('v', 'release') }))
+          .then(() => { sendKey('v', 'press', 'KeyV'); sendKey('v', 'release', 'KeyV') }))
         .catch(() => {})
       return
     }
-    const mod = HELD_MODS[event.key]
+    const mod = HELD_MOD_FOR(event)
     if (mod) {
       event.preventDefault()
       event.stopPropagation()
       heldKeysRef.current.set(event.code, mod)
-      sendKey(mod, 'press')
+      sendKey(mod, 'press', event.code)
       return
     }
-    if (event.key === 'Shift' || event.key === 'CapsLock') {
+    if (event.key === 'CapsLock') {
       event.preventDefault()
       return
     }
     event.preventDefault()
     event.stopPropagation()
     if (event.key.length === 1) {
-      sendInput({ op: 'text', text: event.key })
+      // Sent as a physical key, not as the composed 'ą': the guest's own layout
+      // turns AltGr+a into 'ą', which QEMU's keysym table cannot do.
+      sendKey(event.key, 'press', event.code)
+      sendKey(event.key, 'release', event.code)
       return
     }
     const named = KEY_MAP[event.key] || (/^F\d{1,2}$/.test(event.key) ? event.key : null)
-    if (named) sendInput({ op: 'key', key: named })
+    if (named) sendInput({ op: 'key', key: named, code: event.code })
   }, [ctx, sendKey, sendInput])
 
   const onKbUp = useCallback(event => {
@@ -573,7 +597,7 @@ function DesktopBridgePane({ ctx }) {
     event.preventDefault()
     event.stopPropagation()
     heldKeysRef.current.delete(event.code)
-    sendKey(mod, 'release')
+    sendKey(mod, 'release', event.code)
   }, [sendKey])
 
   useEffect(() => {
@@ -759,10 +783,14 @@ function DesktopBridgePane({ ctx }) {
                   pointerEvents: 'none'
                 }
               }),
+              // Fullscreen reserves a strip for the button bar so the bar never
+              // covers the guest's own top panel — otherwise its buttons eat the
+              // clicks meant for the VM's menu.
               jsx('div', {
                 style: {
                   width: modalFull ? '100%' : (frameSize ? `${Math.round(frameSize.w * 0.5)}px` : '640px'),
-                  height: modalFull ? '100%' : (frameSize ? `${Math.round(frameSize.h * 0.5)}px` : '400px'),
+                  height: modalFull ? `calc(100% - ${CHROME_STRIP}px)` : (frameSize ? `${Math.round(frameSize.h * 0.5)}px` : '400px'),
+                  marginTop: modalFull ? `${CHROME_STRIP}px` : 0,
                   maxWidth: '100%', maxHeight: '100%'
                 },
                 children: jsx(FrameCanvas, { dataUrl, region, controlling: true, onInput: sendInput })
@@ -810,9 +838,9 @@ export default {
       title: 'Computer',
       data: {
         placement: 'main',
-        width: '320px',
+        width: '100%',
         minWidth: '200px',
-        height: '320px',
+        height: '480px',
         collapsible: true,
         dock: { pane: 'hermes-bots:routines', pos: 'top', enforce: true }
       },
