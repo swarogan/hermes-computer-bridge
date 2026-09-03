@@ -7,7 +7,7 @@ Sway, Hyprland) and on X11, because it asks the portal what it can do instead
 of branching on which desktop environment is running. The same panel can also
 view and control a Proxmox virtual machine or any VNC server over RFB.
 
-![The Computer pane docked above Scheduled Jobs in the Hermes Desktop right column, streaming a Proxmox VM (VM 112 mint-test) live](docs/computer-pane.png)
+![The Computer pane in the Hermes Desktop right column streaming Proxmox VM 113 (omarchy) live — the guest is running its own Hermes desktop — while a bot lists the computer_bridge tools it can drive that machine with](docs/computer-pane-live.png)
 
 The panel mounts as a `Computer` tab in the right sidebar, docked directly
 above Cronjobs, and appears only while a bot chat is open.
