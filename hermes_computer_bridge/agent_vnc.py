@@ -50,6 +50,18 @@ class AgentVnc:
         rfb = await self._ensure(descriptor)
         await rfb.send(cmd)
 
+    def paste(self, descriptor: dict, text: str) -> bool:
+        try:
+            self._call(self._paste(descriptor, text))
+            return True
+        except Exception:  # noqa: BLE001
+            self._drop(descriptor)
+            return False
+
+    async def _paste(self, descriptor: dict, text: str) -> None:
+        rfb = await self._ensure(descriptor)
+        await rfb.paste(text)
+
     def screenshot(self, descriptor: dict) -> bytes:
         try:
             return self._call(self._screenshot(descriptor))

@@ -82,6 +82,26 @@ def resolve_vnc_uri(endpoint: str, path: Optional[Path] = None) -> tuple[str, st
     return f"tcp://{host}:{port or 5900}", ""
 
 
+_LABELS: dict[str, str] = {}
+
+
+def _remember(targets: list[dict]) -> list[dict]:
+    for entry in targets:
+        if entry.get("id") and entry.get("label"):
+            _LABELS[entry["id"]] = entry["label"]
+    return targets
+
+
+def label_for(target_id: str) -> Optional[str]:
+    """The human name last seen for this target, e.g. 'VM 113 (omarchy)'.
+
+    Filled in by `list_targets`, which the panel calls to populate its dropdown.
+    Reading it costs nothing; asking Proxmox for the same string would be a
+    network round trip, and callers on a per-turn path cannot pay that.
+    """
+    return _LABELS.get(target_id)
+
+
 def list_targets(
     env: Optional[dict] = None,
     client_factory=None,
@@ -99,7 +119,7 @@ def list_targets(
         )
     cfg = proxmox_config(env, path)
     if not cfg:
-        return targets
+        return _remember(targets)
     try:
         if client_factory is None:
             from hermes_computer_bridge.proxmox_client import ProxmoxClient
@@ -119,7 +139,7 @@ def list_targets(
                 )
     except Exception:
         pass
-    return targets
+    return _remember(targets)
 
 
 def save_vnc_endpoint(endpoint: dict, path: Optional[Path] = None) -> None:
@@ -148,4 +168,5 @@ __all__ = [
     "resolve_vnc_uri",
     "save_vnc_endpoint",
     "delete_vnc_endpoint",
+    "label_for",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import struct
 import zlib
@@ -29,6 +30,12 @@ def vnc_auth_response(challenge: bytes, password: bytes) -> bytes:
 
 
 QEMU_EXT_KEY_EVENT = -258
+# Gap between consecutive key events. Enough for the guest's input stack to
+# keep up (~8ms is well under human typing speed, so a 20-character command
+# costs ~0.3s), small enough that nobody waits on it.
+KEY_EVENT_GAP_S = 0.008
+# How long the guest gets to consume a paste before we hand its clipboard back.
+CLIPBOARD_SETTLE_S = 0.4
 
 
 def set_pixel_format_msg() -> bytes:
@@ -129,8 +136,6 @@ class RfbClient:
             )
             self._ws = _WsTransport(ws)
         else:
-            import asyncio
-
             host, port = _parse_tcp(self.uri)
             reader, writer = await asyncio.open_connection(host, port, ssl=self.ssl_context)
             self._ws = _TcpTransport(reader, writer)
@@ -191,12 +196,50 @@ class RfbClient:
             raise RuntimeError(reason.decode("utf-8", "replace") or "VNC authentication failed")
 
     async def send(self, cmd: dict) -> None:
-        for message in self._input.encode(cmd):
+        """Deliver one command, pacing keystrokes so the guest keeps up.
+
+        Typing used to go out as fast as the socket accepted it — a dozen key
+        events inside a millisecond. The guest processes them through QEMU, a
+        virtual keyboard and its compositor before the focused app ever sees
+        them, and it drops what it cannot keep up with: measured as `ls`
+        vanishing entirely and `-R -n` arriving as `--`.
+
+        Pointer commands are deliberately NOT paced. A press/release pair must
+        stay tight or it reads as a slow click, and motion must not lag.
+        """
+        messages = self._input.encode(cmd)
+        paced = KEY_EVENT_GAP_S if str(cmd.get("op")) in ("text", "key") else 0.0
+        for index, message in enumerate(messages):
+            if paced and index:
+                await asyncio.sleep(paced)
             await self._ws.send(message)
 
     async def set_clipboard(self, text: str) -> None:
         data = text.encode("latin-1", "replace")
         await self._ws.send(struct.pack(">BxxxI", 6, len(data)) + data)
+
+    async def paste(self, text: str, *, settle_s: float = CLIPBOARD_SETTLE_S) -> None:
+        """Deliver `text` in one packet instead of one keystroke per character.
+
+        Typing sends two RFB messages per character and the guest drops what it
+        cannot keep up with — `ls` vanished, `-R -n` arrived as `--`. The
+        clipboard carries the whole string in a single ClientCutText, so there
+        is no stream to lose, and the guest's keyboard layout stops mattering.
+
+        The guest's own clipboard is restored afterwards: a human working in
+        there should not find their copied text replaced by our command. The
+        restore is best-effort — between the paste and it there is a window
+        where the clipboard holds our text, and we only know the previous
+        contents if the guest has sent them (ServerCutText).
+        """
+        previous = self.clipboard
+        await self.set_clipboard(text)
+        # Shift+Insert pastes in terminals and GUI apps alike, unlike Ctrl+V
+        # which terminals reserve for something else.
+        await self.send({"op": "key", "key": "Insert", "mods": ["shift"]})
+        if previous:
+            await asyncio.sleep(settle_s)
+            await self.set_clipboard(previous)
 
     async def request_full(self) -> None:
         await self._ws.send(fb_update_request(0, 0, 0, self.width, self.height))

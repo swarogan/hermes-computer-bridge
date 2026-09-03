@@ -228,3 +228,48 @@ def test_extended_scancodes_are_recoded_to_the_high_bit_form():
     rfb.qemu_ext_key = True
     out = rfb.encode({"op": "key", "code": "AltRight", "key": "altgr", "state": "press"})
     assert out == [qemu_key_event(True, key_to_keysym("altgr"), 0xB8)]
+
+
+# --- pacing: the guest drops keystrokes fired faster than it can consume them --
+
+
+def test_key_events_are_paced_but_pointer_events_are_not():
+    """Unpaced typing lost characters: `ls` vanished, `-R -n` arrived as `--`.
+
+    A press/release pair for the mouse must stay tight, so pointer commands
+    keep going out back to back.
+    """
+    import asyncio
+
+    from hermes_computer_bridge.rfb_client import KEY_EVENT_GAP_S, RfbClient
+
+    class FakeWs:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, data):
+            self.sent.append(data)
+
+    async def run(cmd):
+        rfb = RfbClient.__new__(RfbClient)
+        rfb._input = RfbInput()
+        rfb._ws = FakeWs()
+        naps = []
+
+        async def fake_sleep(seconds):
+            naps.append(seconds)
+
+        original, asyncio.sleep = asyncio.sleep, fake_sleep
+        try:
+            await rfb.send(cmd)
+        finally:
+            asyncio.sleep = original
+        return rfb._ws.sent, naps
+
+    typed, naps = asyncio.run(run({"op": "text", "text": "ls"}))
+    assert len(typed) == 4, "two characters, press and release each"
+    assert naps == [KEY_EVENT_GAP_S] * 3, "a gap before every event but the first"
+
+    clicked, naps = asyncio.run(run({"op": "click", "x": 5, "y": 6}))
+    assert len(clicked) == 2
+    assert naps == [], "a click must not be slowed down"
