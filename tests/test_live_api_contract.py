@@ -179,3 +179,45 @@ def test_proxmox_config_endpoints_mask_the_token():
     get = _func_src("get_proxmox")
     assert '"has_token": bool(' in get
     assert '"token":' not in get
+
+
+def test_input_never_falls_through_to_the_local_desktop():
+    """A remote target must not silently drive the human's own machine.
+
+    Reported as "the cursor runs off to the other monitor and I cannot click".
+    When the VNC session was down, /input dropped to `_input_service.inject`,
+    which drives THIS desktop through portal-remotedesktop — while the panel
+    still showed the VM. VM-sized coordinates then landed somewhere else
+    entirely on a multi-monitor host, so the pointer appeared to run away.
+
+    Asserted at source level, like the rest of this module: the guard must sit
+    between the VNC branch and the local ladder.
+    """
+    body = ast.get_source_segment(
+        API,
+        next(
+            node
+            for node in ast.walk(TREE)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "live_input"
+        ),
+    )
+    assert "_input_service.inject" in body, "local injection still lives here"
+    guard = body.index('_target != "local"')
+    local = body.index("_input_service.inject")
+    assert guard < local, "the remote-target guard must come BEFORE local injection"
+    assert "503" in body[guard - 200 : local], "refusal must be an error, not a silent no-op"
+
+
+def test_clipboard_also_refuses_without_a_remote_session():
+    """Already correct — pinned so it stays that way."""
+    body = ast.get_source_segment(
+        API,
+        next(
+            node
+            for node in ast.walk(TREE)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "set_clipboard"
+        ),
+    )
+    assert "no remote session" in body

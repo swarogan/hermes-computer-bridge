@@ -470,6 +470,19 @@ async def live_input(cmd: dict[str, Any] = Body(...)) -> dict[str, Any]:
         if not await _vnc.send(cmd):
             raise HTTPException(status_code=503, detail="input not delivered")
         return {"ok": True, "rung": f"proxmox-vnc:{_target}"}
+    # A remote target must NEVER fall through to the local input ladder. The
+    # panel still shows the VM, so the human keeps aiming at it while the
+    # pointer is really being driven on their own desktop — with VM-sized
+    # coordinates landing somewhere else entirely on a multi-monitor host.
+    # Reported as "the cursor runs off to the other monitor and I cannot click".
+    if _target and _target != "local":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"no live session for {_target}; refusing to send input to the "
+                "local desktop instead. Reconnect the target in the Computer panel."
+            ),
+        )
     try:
         rung = await asyncio.to_thread(_input_service.inject, cmd)
     except CapabilityMissing as exc:

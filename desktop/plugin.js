@@ -413,6 +413,7 @@ function DesktopBridgePane({ ctx }) {
   const [outputName, setOutputName] = useState(undefined)
   const [connected, setConnected] = useState(true)
   const [startError, setStartError] = useState(null)
+  const [inputError, setInputError] = useState(null)
   const [retryNonce, setRetryNonce] = useState(0)
   const [pushedFrame, setPushedFrame] = useState(null)
   const [target, setTarget] = useState('__none__')
@@ -461,8 +462,13 @@ function DesktopBridgePane({ ctx }) {
     }
   }, [ctx, profile])
 
+  // Swallowing failures here is what made a dead session look like a dead
+  // mouse: the backend refuses input for a remote target whose session is
+  // down, and without this the human just sees nothing happen.
   const sendInput = useCallback(cmd => {
-    ctx.rest('/input', { method: 'POST', body: cmd }).catch(() => {})
+    ctx.rest('/input', { method: 'POST', body: cmd })
+      .then(() => setInputError(null))
+      .catch(err => setInputError(String(err?.message || err)))
   }, [ctx])
 
   // Polling is the BASE path: ctx.socket resolves to a no-op on OAuth remotes.
@@ -795,6 +801,15 @@ function DesktopBridgePane({ ctx }) {
                 },
                 children: jsx(FrameCanvas, { dataUrl, region, controlling: true, onInput: sendInput })
               }),
+              inputError ? jsx('div', {
+                style: {
+                  position: 'absolute', bottom: '8px', left: '8px', right: '8px', zIndex: 2,
+                  padding: '6px 10px', borderRadius: '4px', fontSize: '12px',
+                  background: 'var(--ui-bg-secondary)', color: 'var(--ui-text-primary)',
+                  border: '1px solid var(--ui-stroke-secondary)', pointerEvents: 'none'
+                },
+                children: `Input not delivered — ${inputError}`
+              }) : null,
               jsx('div', {
                 style: { position: 'absolute', top: '8px', right: '8px', zIndex: 1, display: 'flex', gap: '6px' },
                 children: [
