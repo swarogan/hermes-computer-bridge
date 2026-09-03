@@ -399,7 +399,7 @@ def test_system_prompt_section_warns_off_computer_use(plugin, monkeypatch):
     monkeypatch.setattr(plugin, "label_for", lambda tid: "VM 113 (omarchy)")
     section = plugin._system_prompt_section()
     assert "computer_use" in section
-    assert "LOCAL desktop" in section
+    assert "local desktop" in section.lower()
     assert "omarchy" in section
     assert "computer_bridge_paste" in section
 
@@ -434,3 +434,35 @@ def test_registration_survives_a_host_without_the_section_api(plugin):
     plugin.register(OldCtx())
     assert len(registered["tools"]) == 10
     assert registered["hook"] is not None
+
+
+def test_only_the_default_profile_seeds_the_others(plugin, monkeypatch):
+    """A bot must not try to install the plugin into its siblings.
+
+    Seeding runs from the default profile because that is the one place the
+    plugin is guaranteed to be loaded; a bot that lacks it cannot run this code
+    anyway, and a bot that has it has no business writing into other profiles.
+    """
+    calls = []
+    monkeypatch.setattr(
+        "hermes_computer_bridge.profile_install.auto_install",
+        lambda repo, log=None: calls.append(repo) or [],
+    )
+
+    monkeypatch.setattr(plugin, "_profile_name", lambda: "tom")
+    plugin._seed_other_profiles()
+    assert calls == [], "a bot profile must not seed anything"
+
+    monkeypatch.setattr(plugin, "_profile_name", lambda: "default")
+    plugin._seed_other_profiles()
+    assert calls == [plugin.PLUGIN_DIR]
+
+
+def test_seeding_failure_never_breaks_registration(plugin, monkeypatch):
+    """Registration must survive a read-only or unusual ~/.hermes."""
+    def boom(repo, log=None):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr("hermes_computer_bridge.profile_install.auto_install", boom)
+    monkeypatch.setattr(plugin, "_profile_name", lambda: "default")
+    plugin._seed_other_profiles()  # must not raise

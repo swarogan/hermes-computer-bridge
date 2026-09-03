@@ -124,13 +124,44 @@ the whole update.
 ```bash
 git clone https://github.com/swarogan/hermes-computer-bridge
 cd hermes-computer-bridge
-python3 scripts/install_dev.py --profile default   # idempotent symlink into ~/.hermes/plugins/
+python3 scripts/install_dev.py --all-profiles       # every profile, not just the main one
 hermes plugins enable hermes-computer-bridge         # the official enable gate
 # then restart Hermes Desktop; plugin routers mount once, at startup
 ```
 
+### Install into every profile, not just the default one
+
+**Use `--all-profiles`.** Each Hermes profile is its own `HERMES_HOME` with its
+own `plugins/` directory, and it does **not** inherit `~/.hermes/plugins/`.
+Install only into the root home and the plugin works in your main session while
+every bot silently lacks it: `PluginManager` never calls `register()` for that
+profile, so the bot gets no tools, no hooks and no system-prompt section — and
+the model falls back to `computer_use`, which drives your **local desktop**
+instead of the VM. The usual symptom is a bot answering "I don't have a
+computer-bridge tool" while the panel happily shows the VM.
+
+Check it any time with `hermes --profile <bot> plugins info hermes-computer-bridge`;
+anything other than `Status: enabled` means that bot cannot see the bridge.
+
+**Bots created later are seeded automatically.** The Desktop's create-bot form
+cannot copy plugins — its gateway call sends `clone_config`, not `clone_all`
+(`tui_gateway/methods_profiles.py`) — so a new bot would start blind and fall
+back to `computer_use`, which drives your local desktop. To avoid that, the
+plugin links itself into any profile that lacks it, once per start, from the
+default profile. It only ever creates a MISSING link: it never repoints,
+overwrites, deletes, or touches `config.yaml`, and a profile where you put
+something by hand is left alone. Every action is written to
+`~/.local/state/hermes-computer-bridge/bridge-trace.log`. Set
+`HERMES_BRIDGE_NO_AUTO_INSTALL=1` to turn it off.
+
+Windows works too: where a symlink needs Administrator or Developer Mode, the
+script falls back to a directory junction (and a hard link for the single
+desktop file). Both keep the repo as the one source of truth, so `git pull`
+remains the whole update story — which a copy would break.
+
 The script never touches `config.yaml` and refuses to overwrite a real
-directory. `scripts/install_dev.py --uninstall` removes only the symlink.
+directory. `scripts/install_dev.py --uninstall` removes only the symlink;
+add `--all-profiles` to remove it everywhere.
 Validate the install with the official tool:
 
 ```bash

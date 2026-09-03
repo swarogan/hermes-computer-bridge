@@ -19,7 +19,13 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-NAME = "hermes-computer-bridge"
+sys.path.insert(0, str(REPO))
+
+from hermes_computer_bridge.profile_install import (  # noqa: E402
+    NAME,
+    discover_profiles,
+    link_to,
+)
 
 
 def hermes_home(profile: str | None) -> Path:
@@ -36,8 +42,29 @@ def hermes_home(profile: str | None) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default=None, help="Hermes profile (default: root home)")
+    parser.add_argument(
+        "--all-profiles",
+        action="store_true",
+        help="Install into the root home AND every profile (bots need their own copy)",
+    )
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
+
+    if args.all_profiles:
+        targets: list[str | None] = [None, *discover_profiles()]
+        failures = 0
+        for name in targets:
+            print(f"\n--- {name or 'default'} ---")
+            failures += install_one(name, uninstall=args.uninstall)
+        if not failures:
+            print("\nEvery profile now sees the plugin. Restart Hermes Desktop.")
+        return 1 if failures else 0
+
+    return install_one(args.profile, uninstall=args.uninstall)
+
+
+def install_one(profile: str | None, *, uninstall: bool) -> int:
+    args = argparse.Namespace(profile=profile, uninstall=uninstall)
 
     root = hermes_home(args.profile) / "plugins"
     link = root / NAME
@@ -70,8 +97,8 @@ def main() -> int:
         current = Path(os.readlink(link))
         if current != REPO:
             link.unlink()
-            link.symlink_to(REPO, target_is_directory=True)
-            print(f"repointed {link} -> {REPO}")
+            how = link_to(link, REPO, is_directory=True)
+            print(f"repointed {link} -> {REPO} ({how})")
         else:
             print(f"already installed: {link} -> {REPO}")
     elif link.exists():
@@ -82,15 +109,15 @@ def main() -> int:
         )
         return 1
     else:
-        link.symlink_to(REPO, target_is_directory=True)
-        print(f"installed: {link} -> {REPO}")
+        how = link_to(link, REPO, is_directory=True)
+        print(f"installed: {link} -> {REPO} ({how})")
 
     # Standalone desktop door is default-on. Unified half stays opt-in.
     target = REPO / "desktop" / "plugin.js"
     if desktop_link.is_symlink() or desktop_link.is_file():
         desktop_link.unlink()
-    desktop_link.symlink_to(target)
-    print(f"installed desktop door: {desktop_link} -> {target}")
+    how = link_to(desktop_link, target, is_directory=False)
+    print(f"installed desktop door: {desktop_link} -> {target} ({how})")
     print("\nNext (the official gate — this script does NOT enable anything):")
     print(f"  hermes plugins enable {NAME}")
     print("  Restart Hermes Desktop. The standalone desktop-plugins door loads on by default.")
